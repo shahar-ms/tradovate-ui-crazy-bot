@@ -174,6 +174,133 @@ def test_logs_page_appends_events(qtbot):
     assert page.halt_events.rowCount() >= 1
 
 
+def test_calibration_clear_uses_items_list_selection(qtbot, monkeypatch):
+    """Clearing should respect the row selected in the 'Marked items' list."""
+    from PySide6.QtWidgets import QMessageBox
+    import numpy as np
+
+    from app.models.common import Point, Region
+    from app.ui.pages.calibration_page import CalibTargets, CalibrationPage
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: QMessageBox.Ok)
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    # pretend an image is loaded so marking is allowed
+    page._full_image = np.zeros((100, 200, 3), dtype=np.uint8)
+    page._image_source = "capture"
+    page._monitor_size = (200, 100)
+    page._refresh_image_buttons()
+
+    # seed three marks
+    page.targets = CalibTargets(
+        buy=Point(x=10, y=20),
+        sell=Point(x=30, y=40),
+        cancel=Point(x=50, y=60),
+    )
+    page._refresh_items_list()
+
+    # select the 'sell' row in the items list (index 3 in ITEMS order)
+    sell_row = -1
+    for i in range(page.items_list.count()):
+        if page.items_list.item(i).data(Qt.UserRole) == "sell":
+            sell_row = i
+            break
+    assert sell_row >= 0
+    page.items_list.setCurrentRow(sell_row)
+
+    # combo is pointing at 'anchor' (first), but list selection must win
+    page.item_combo.setCurrentIndex(page.item_combo.findData("anchor"))
+
+    page._clear_current_item()
+
+    assert page.targets.sell is None
+    assert page.targets.buy is not None
+    assert page.targets.cancel is not None
+
+
+def test_calibration_clear_falls_back_to_combo(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    import numpy as np
+
+    from app.models.common import Point
+    from app.ui.pages.calibration_page import CalibTargets, CalibrationPage
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: QMessageBox.Ok)
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    page._full_image = np.zeros((100, 200, 3), dtype=np.uint8)
+    page._refresh_image_buttons()
+    page.targets = CalibTargets(buy=Point(x=10, y=20))
+    page._refresh_items_list()
+
+    # no list selection
+    page.items_list.setCurrentRow(-1)
+    # combo on 'buy'
+    page.item_combo.setCurrentIndex(page.item_combo.findData("buy"))
+    page._clear_current_item()
+    assert page.targets.buy is None
+
+
+def test_calibration_image_buttons_toggle(qtbot):
+    import numpy as np
+    from app.ui.pages.calibration_page import CalibrationPage
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    # initially: capture+load enabled, reset disabled
+    assert page.btn_capture.isEnabled()
+    assert page.btn_load_file.isEnabled()
+    assert not page.btn_reset_image.isEnabled()
+
+    # simulate loading an image
+    page._set_image(np.zeros((50, 80, 3), dtype=np.uint8),
+                    source="file:fake.png", monitor_index=1, size=(80, 50))
+    assert not page.btn_capture.isEnabled()
+    assert not page.btn_load_file.isEnabled()
+    assert page.btn_reset_image.isEnabled()
+
+
+def test_calibration_load_from_file_reads_png(qtbot, tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from app.ui.pages.calibration_page import CalibrationPage
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: QMessageBox.Ok)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Yes)
+
+    # write a fake screenshot
+    img = np.zeros((60, 120, 3), dtype=np.uint8)
+    img[20:40, 40:80] = (0, 200, 0)
+    png = tmp_path / "shot.png"
+    cv2.imwrite(str(png), img)
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        lambda *a, **kw: (str(png), "Images"))
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    page._load_from_file()
+
+    assert page._full_image is not None
+    assert page._monitor_size == (120, 60)
+    assert page._image_source.startswith("file:")
+    # buttons have flipped
+    assert page.btn_reset_image.isEnabled()
+    assert not page.btn_capture.isEnabled()
+
+
 def test_run_control_page_buttons_disabled_when_not_running(qtbot):
     signals = AppSignals()
     state = UiState()

@@ -2,21 +2,31 @@
 Calibration page.
 
 Flow:
-  1. pick a monitor
-  2. capture current screen
+  1. load a screenshot (capture this machine's monitor OR load from file)
+  2. pick the target monitor (where the bot will click at runtime)
   3. mark items one-by-one (anchor region, price region, buy/sell/cancel, optional)
   4. save
   5. validate
 
 Persists via the same ScreenMap model used by the rest of the bot.
+
+Note on the two sources:
+  - "Capture this machine's screen" grabs the CURRENT monitor of the PC
+    running the UI. Use this when the bot and Tradovate run on the same PC.
+  - "Load screenshot from file" loads a PNG/JPG captured elsewhere (for
+    example: Tradovate runs on a different machine). At runtime the bot
+    still captures `monitor_index` on THIS machine — so the image
+    dimensions must match that monitor's resolution.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
+import cv2
 import mss
 import numpy as np
 from PySide6.QtCore import Qt, Slot
@@ -66,6 +76,7 @@ class CalibrationPage(QWidget):
         self.signals = signals
         self.targets = CalibTargets()
         self._full_image: Optional[np.ndarray] = None
+        self._image_source: str = "none"   # "capture" | "file:<path>" | "none"
         self._monitor_index: int = 1
         self._monitor_size: tuple[int, int] = (0, 0)
         self._current_item_key: Optional[str] = None
@@ -74,59 +85,84 @@ class CalibrationPage(QWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(8)
 
-        # top controls
-        top = QHBoxLayout()
-        top.setSpacing(8)
+        # --- row 1: screenshot source --- #
+        src_row = QHBoxLayout()
+        src_row.setSpacing(8)
 
-        top.addWidget(QLabel("Monitor:"))
+        src_row.addWidget(QLabel("Target monitor (where bot clicks at runtime):"))
         self.monitor_combo = QComboBox()
         self._populate_monitors()
-        top.addWidget(self.monitor_combo)
+        src_row.addWidget(self.monitor_combo)
 
-        self.btn_capture = QPushButton("Capture monitor")
-        top.addWidget(self.btn_capture)
+        self.btn_capture = QPushButton("Capture this machine's screen")
+        self.btn_capture.setToolTip(
+            "Grab the current monitor of the PC running this UI.\n"
+            "Use this if Tradovate runs on the same PC as the bot."
+        )
+        self.btn_load_file = QPushButton("Load screenshot from file…")
+        self.btn_load_file.setToolTip(
+            "Load a PNG/JPG screenshot from disk.\n"
+            "Useful when Tradovate is on a different machine."
+        )
+        self.btn_reset_image = QPushButton("Change screenshot")
+        self.btn_reset_image.setToolTip(
+            "Clear the current screenshot + all marks so you can load a new one."
+        )
+        src_row.addWidget(self.btn_capture)
+        src_row.addWidget(self.btn_load_file)
+        src_row.addWidget(self.btn_reset_image)
 
-        top.addWidget(QLabel("  |  Mark:"))
+        src_row.addStretch(1)
+        root.addLayout(src_row)
+
+        # --- row 2: marking controls --- #
+        mark_row = QHBoxLayout()
+        mark_row.setSpacing(8)
+
+        mark_row.addWidget(QLabel("Mark:"))
         self.item_combo = QComboBox()
         for key, _kind, label, _color, required in ITEMS:
             self.item_combo.addItem(f"{label}{'' if required else ' (opt)'}", userData=key)
-        top.addWidget(self.item_combo)
+        mark_row.addWidget(self.item_combo)
 
         self.btn_start_mark = QPushButton("Start mark")
         self.btn_commit = QPushButton("Commit (Enter)")
         self.btn_cancel_mark = QPushButton("Cancel mark (Esc)")
-        self.btn_clear_item = QPushButton("Clear item")
+        self.btn_clear_item = QPushButton("Clear selected item")
+        self.btn_clear_item.setToolTip(
+            "Clears the item currently selected in the 'Marked items' list on the right, "
+            "or the one chosen in the 'Mark' dropdown if no row is selected."
+        )
         for b in (self.btn_start_mark, self.btn_commit, self.btn_cancel_mark, self.btn_clear_item):
-            top.addWidget(b)
+            mark_row.addWidget(b)
 
-        top.addStretch(1)
-        root.addLayout(top)
+        mark_row.addStretch(1)
+        root.addLayout(mark_row)
 
-        # main body: canvas on the left, info on the right
+        # --- main body: canvas on the left, info on the right --- #
         splitter = QSplitter(Qt.Horizontal)
 
-        # left: canvas
         self.canvas = CalibrationCanvas()
         self.canvas.region_marked.connect(self._on_region_marked)
         self.canvas.point_marked.connect(self._on_point_marked)
         splitter.addWidget(self.canvas)
 
-        # right column
         right = QWidget()
         right_lay = QVBoxLayout(right)
         right_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.setSpacing(8)
 
         status_panel = Panel("Calibration state")
-        self.lv_monitor = LabeledValue("Monitor")
-        self.lv_size = LabeledValue("Resolution")
-        self.lv_captured = LabeledValue("Screenshot captured")
-        for w in (self.lv_monitor, self.lv_size, self.lv_captured):
+        self.lv_source = LabeledValue("Screenshot source")
+        self.lv_monitor = LabeledValue("Target monitor")
+        self.lv_size = LabeledValue("Image resolution")
+        for w in (self.lv_source, self.lv_monitor, self.lv_size):
             status_panel.add(w)
         right_lay.addWidget(status_panel)
 
-        items_panel = Panel("Marked items")
+        items_panel = Panel("Marked items  (click a row + 'Clear selected item' to remove)")
         self.items_list = QListWidget()
+        self.items_list.itemDoubleClicked.connect(self._on_items_double_clicked)
         items_panel.add(self.items_list)
         right_lay.addWidget(items_panel, 1)
 
@@ -147,7 +183,7 @@ class CalibrationPage(QWidget):
         actions_panel.add(self._wrap_row(row2))
 
         row3 = QHBoxLayout()
-        self.btn_reset_all = QPushButton("Reset all")
+        self.btn_reset_all = QPushButton("Reset all marks")
         self.btn_reset_all.setProperty("role", "danger")
         row3.addWidget(self.btn_reset_all)
         actions_panel.add(self._wrap_row(row3))
@@ -158,8 +194,10 @@ class CalibrationPage(QWidget):
         splitter.setSizes([900, 380])
         root.addWidget(splitter, 1)
 
-        # wiring
+        # --- wiring --- #
         self.btn_capture.clicked.connect(self._capture_monitor)
+        self.btn_load_file.clicked.connect(self._load_from_file)
+        self.btn_reset_image.clicked.connect(self._reset_image)
         self.btn_start_mark.clicked.connect(self._start_mark)
         self.btn_commit.clicked.connect(self.canvas.commit)
         self.btn_cancel_mark.clicked.connect(self.canvas.cancel_mark)
@@ -168,10 +206,11 @@ class CalibrationPage(QWidget):
         self.btn_load.clicked.connect(self._load_saved)
         self.btn_validate.clicked.connect(lambda: self._validate(offline=False))
         self.btn_validate_offline.clicked.connect(lambda: self._validate(offline=True))
-        self.btn_reset_all.clicked.connect(self._reset_all)
+        self.btn_reset_all.clicked.connect(self._reset_all_marks)
 
         self._refresh_items_list()
         self._refresh_status()
+        self._refresh_image_buttons()
 
     # ---- helpers ---- #
 
@@ -194,7 +233,7 @@ class CalibrationPage(QWidget):
         except Exception as e:
             self.monitor_combo.addItem(f"(mss error: {e})", userData=1)
 
-    # ---- actions ---- #
+    # ---- image sources ---- #
 
     def _capture_monitor(self) -> None:
         idx = self.monitor_combo.currentData()
@@ -209,19 +248,103 @@ class CalibrationPage(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Capture failed", str(e))
             return
-
-        self._full_image = bgr
-        self._monitor_index = idx
-        self._monitor_size = (int(mon["width"]), int(mon["height"]))
-        self.canvas.set_image(bgr)
-        self._redraw_overlays()
-        self._refresh_status()
+        self._set_image(bgr, source="capture",
+                        monitor_index=idx,
+                        size=(int(mon["width"]), int(mon["height"])))
         emit_event(self.signals, "info", "calibration",
                    f"captured monitor {idx}: {self._monitor_size[0]}x{self._monitor_size[1]}")
 
+    def _load_from_file(self) -> None:
+        start_dir = str(paths.screenshots_dir())
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load screenshot",
+            start_dir,
+            "Images (*.png *.jpg *.jpeg *.bmp)",
+        )
+        if not filename:
+            return
+        try:
+            img = cv2.imread(filename, cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError("unreadable image (OpenCV returned None)")
+        except Exception as e:
+            QMessageBox.critical(self, "Load failed", f"Could not read {filename}:\n{e}")
+            return
+
+        h, w = img.shape[:2]
+
+        # warn if it doesn't match the selected monitor
+        target_idx = self.monitor_combo.currentData() or 1
+        target_size = self._monitor_resolution(target_idx)
+        if target_size is not None and target_size != (w, h):
+            reply = QMessageBox.question(
+                self,
+                "Resolution mismatch",
+                f"The image is {w}x{h}, but monitor {target_idx} is "
+                f"{target_size[0]}x{target_size[1]}.\n\n"
+                "Clicks will only align if the bot runs on a monitor with the same size "
+                "as this screenshot. Continue anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self._set_image(img, source=f"file:{filename}",
+                        monitor_index=target_idx, size=(w, h))
+        emit_event(self.signals, "info", "calibration",
+                   f"loaded screenshot {Path(filename).name} ({w}x{h})")
+
+    def _monitor_resolution(self, idx: int) -> Optional[tuple[int, int]]:
+        try:
+            with mss.mss() as sct:
+                mon = sct.monitors[idx]
+                return (int(mon["width"]), int(mon["height"]))
+        except Exception:
+            return None
+
+    def _set_image(self, bgr: np.ndarray, source: str,
+                   monitor_index: int, size: tuple[int, int]) -> None:
+        self._full_image = bgr
+        self._image_source = source
+        self._monitor_index = monitor_index
+        self._monitor_size = size
+        self.canvas.set_image(bgr)
+        self._redraw_overlays()
+        self._refresh_status()
+        self._refresh_image_buttons()
+
+    def _reset_image(self) -> None:
+        if self._full_image is None:
+            return
+        if QMessageBox.question(
+                self, "Change screenshot?",
+                "This clears the current screenshot and ALL marked items.\n\n"
+                "Continue?",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        self._full_image = None
+        self._image_source = "none"
+        self._monitor_size = (0, 0)
+        self.targets = CalibTargets()
+        self.canvas.clear_image()
+        self._redraw_overlays()
+        self._refresh_items_list()
+        self._refresh_status()
+        self._refresh_image_buttons()
+
+    def _refresh_image_buttons(self) -> None:
+        loaded = self._full_image is not None
+        self.btn_capture.setEnabled(not loaded)
+        self.btn_load_file.setEnabled(not loaded)
+        self.btn_reset_image.setEnabled(loaded)
+
+    # ---- marking ---- #
+
     def _start_mark(self) -> None:
         if self._full_image is None:
-            QMessageBox.warning(self, "No screenshot", "Capture the monitor first.")
+            QMessageBox.warning(self, "No screenshot",
+                                "Capture this machine's screen or load one from file first.")
             return
         key = self.item_combo.currentData()
         kind = next(it[1] for it in ITEMS if it[0] == key)
@@ -233,10 +356,44 @@ class CalibrationPage(QWidget):
         self.canvas.setFocus()
 
     def _clear_current_item(self) -> None:
-        key = self.item_combo.currentData()
+        key = self._selected_key()
+        if key is None:
+            QMessageBox.information(
+                self, "Clear item",
+                "Select an item in the 'Marked items' list on the right, "
+                "or pick one in the 'Mark' dropdown, then try again."
+            )
+            return
+        label = next(it[2] for it in ITEMS if it[0] == key)
+        if getattr(self.targets, key) is None:
+            QMessageBox.information(self, "Clear item",
+                                    f"'{label}' is already empty.")
+            return
         setattr(self.targets, key, None)
         self._redraw_overlays()
         self._refresh_items_list()
+        emit_event(self.signals, "info", "calibration", f"cleared {label}")
+
+    def _selected_key(self) -> Optional[str]:
+        """Prefer the items_list selection; fall back to the combo."""
+        row = self.items_list.currentRow()
+        if row >= 0:
+            item = self.items_list.currentItem()
+            if item is not None:
+                key = item.data(Qt.UserRole)
+                if key:
+                    return key
+        return self.item_combo.currentData()
+
+    def _on_items_double_clicked(self, item: QListWidgetItem) -> None:
+        """Double-click a row to jump the 'Mark' dropdown to it and re-mark."""
+        key = item.data(Qt.UserRole)
+        if not key:
+            return
+        idx = self.item_combo.findData(key)
+        if idx >= 0:
+            self.item_combo.setCurrentIndex(idx)
+            self._start_mark()
 
     @Slot(int, int, int, int)
     def _on_region_marked(self, left: int, top: int, width: int, height: int) -> None:
@@ -244,6 +401,7 @@ class CalibrationPage(QWidget):
             return
         setattr(self.targets, self._current_item_key,
                 Region(left=left, top=top, width=width, height=height))
+        self._auto_select_after_mark(self._current_item_key)
         self._current_item_key = None
         self._redraw_overlays()
         self._refresh_items_list()
@@ -253,9 +411,24 @@ class CalibrationPage(QWidget):
         if self._current_item_key is None:
             return
         setattr(self.targets, self._current_item_key, Point(x=x, y=y))
+        self._auto_select_after_mark(self._current_item_key)
         self._current_item_key = None
         self._redraw_overlays()
         self._refresh_items_list()
+
+    def _auto_select_after_mark(self, key: str) -> None:
+        """After marking, select the next unmarked item in the Mark combo."""
+        keys = [it[0] for it in ITEMS]
+        try:
+            start = keys.index(key) + 1
+        except ValueError:
+            return
+        for i in range(start, len(keys)):
+            if getattr(self.targets, keys[i]) is None:
+                idx = self.item_combo.findData(keys[i])
+                if idx >= 0:
+                    self.item_combo.setCurrentIndex(idx)
+                return
 
     # ---- overlays / display ---- #
 
@@ -276,6 +449,7 @@ class CalibrationPage(QWidget):
         self.canvas.set_overlays(overlays)
 
     def _refresh_items_list(self) -> None:
+        prev = self.items_list.currentRow()
         self.items_list.clear()
         for key, kind, label, _color, required in ITEMS:
             val = getattr(self.targets, key)
@@ -285,14 +459,28 @@ class CalibrationPage(QWidget):
                 txt = f"[X] {label}  {val.width}x{val.height} @ ({val.left},{val.top})"
             else:
                 txt = f"[X] {label}  ({val.x}, {val.y})"
-            self.items_list.addItem(QListWidgetItem(txt))
+            item = QListWidgetItem(txt)
+            item.setData(Qt.UserRole, key)
+            self.items_list.addItem(item)
+        # restore selection where possible
+        if 0 <= prev < self.items_list.count():
+            self.items_list.setCurrentRow(prev)
 
     def _refresh_status(self) -> None:
+        self.lv_source.set_value(self._image_source_display(),
+                                 status="ok" if self._full_image is not None else "inactive")
         self.lv_monitor.set_value(str(self._monitor_index))
         self.lv_size.set_value(f"{self._monitor_size[0]}x{self._monitor_size[1]}"
                                if self._monitor_size[0] else "—")
-        self.lv_captured.set_value("yes" if self._full_image is not None else "no",
-                                   status="ok" if self._full_image is not None else "inactive")
+
+    def _image_source_display(self) -> str:
+        if self._image_source == "none":
+            return "—"
+        if self._image_source == "capture":
+            return "this machine's monitor"
+        if self._image_source.startswith("file:"):
+            return "file: " + Path(self._image_source[5:]).name
+        return self._image_source
 
     # ---- save / load / validate ---- #
 
@@ -305,7 +493,8 @@ class CalibrationPage(QWidget):
 
     def _save(self) -> None:
         if self._full_image is None:
-            QMessageBox.warning(self, "No screenshot", "Capture the monitor first.")
+            QMessageBox.warning(self, "No screenshot",
+                                "Load a screenshot first (capture or file).")
             return
         missing = self._missing_required()
         if missing:
@@ -313,13 +502,11 @@ class CalibrationPage(QWidget):
                                 "Still need: " + ", ".join(missing))
             return
 
-        # save anchor crop
         a = self.targets.anchor
         anchor_crop = iu.crop(self._full_image, a.left, a.top, a.width, a.height)
         iu.save_png(anchor_crop, paths.anchor_reference_path())
         iu.save_png(self._full_image, paths.calibration_full_path())
 
-        # save overlay preview
         preview = self._full_image.copy()
         for key, kind, label, color_hex, _req in ITEMS:
             v = getattr(self.targets, key)
@@ -380,17 +567,25 @@ class CalibrationPage(QWidget):
             status=sm.status_region,
         )
 
-        # load full screenshot if exists
         full_path = paths.calibration_full_path()
         if full_path.exists():
             self._full_image = iu.load_png(full_path)
+            self._image_source = f"file:{full_path}"
             self.canvas.set_image(self._full_image)
         else:
+            self._full_image = None
+            self._image_source = "none"
             self.canvas.clear_image()
+
+        # sync monitor combo with loaded monitor_index
+        idx_combo = self.monitor_combo.findData(sm.monitor_index)
+        if idx_combo >= 0:
+            self.monitor_combo.setCurrentIndex(idx_combo)
 
         self._redraw_overlays()
         self._refresh_items_list()
         self._refresh_status()
+        self._refresh_image_buttons()
         QMessageBox.information(self, "Loaded",
                                 f"Loaded from {paths.screen_map_path()}")
 
@@ -402,11 +597,12 @@ class CalibrationPage(QWidget):
         else:
             QMessageBox.critical(self, "Validation failed", text)
 
-    def _reset_all(self) -> None:
-        if QMessageBox.question(self, "Reset calibration?",
-                                "Clear all marked items in this editor? "
-                                "(the saved JSON file is not deleted)",
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+    def _reset_all_marks(self) -> None:
+        if QMessageBox.question(
+                self, "Reset all marks?",
+                "Clear all marked items in this editor?\n"
+                "(The screenshot stays loaded; the saved JSON file is not deleted.)",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         self.targets = CalibTargets()
         self._redraw_overlays()
