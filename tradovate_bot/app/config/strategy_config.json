@@ -1,0 +1,21 @@
+{
+  "symbol": "MNQ",
+  "tick_size": 0.25,
+  "bar_seconds": 1,
+  "level_lookback_bars": 120,
+  "level_touch_tolerance_points": 0.5,
+  "min_touches_for_level": 2,
+  "sweep_break_distance_points": 1.0,
+  "sweep_return_timeout_bars": 5,
+  "entry_offset_points": 0.0,
+  "stop_loss_points": 5.0,
+  "take_profit_points": 12.0,
+  "time_stop_bars": 20,
+  "cooldown_bars_after_exit": 10,
+  "max_trades_per_session": 6,
+  "max_consecutive_losses": 2,
+  "cancel_all_before_new_entry": true,
+  "session_windows": [
+    {"start": "16:30", "end": "18:30", "timezone": "Asia/Nicosia"}
+  ]
+}

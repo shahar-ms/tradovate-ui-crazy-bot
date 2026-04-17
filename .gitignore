@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Env
+.env
+.env.local
+
+# Runtime artifacts (logs, screenshots, state, sessions)
+tradovate_bot/runtime/logs/*
+!tradovate_bot/runtime/logs/.gitkeep
+tradovate_bot/runtime/screenshots/*
+!tradovate_bot/runtime/screenshots/.gitkeep
+tradovate_bot/runtime/sessions/*
+!tradovate_bot/runtime/sessions/.gitkeep
+tradovate_bot/runtime/state/*
+!tradovate_bot/runtime/state/.gitkeep
+
+# User-specific calibration (must be generated per machine)
+tradovate_bot/app/config/screen_map.json
