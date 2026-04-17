@@ -17,29 +17,35 @@ cls
 echo =====================================================
 echo   Tradovate UI crazy bot
 echo =====================================================
-echo   1. Calibrate         (mark regions + click points)
-echo   2. Validate          (check calibration)
-echo   3. Price debug       (live price stream, no trading)
-echo   4. Paper mode        (strategy on, clicks OFF)
-echo   5. ARMED mode        (live clicks -- requires confirm)
-echo   6. Replay synthetic  (300 synth ticks through engine)
-echo   7. Overlay preview   (draw calibrated points on screen)
-echo   8. Run tests         (pytest)
-echo   9. Install / upgrade Python deps
+echo   1. Launch UI         (PySide6 control panel)
+echo   2. Calibrate (CLI)   (OpenCV calibrator)
+echo   3. Validate          (check calibration)
+echo   4. Price debug       (live price stream, no trading)
+echo   5. Paper mode        (strategy on, clicks OFF)
+echo   6. ARMED mode        (live clicks -- requires confirm)
+echo   7. Replay synthetic  (300 synth ticks through engine)
+echo   8. Overlay preview   (draw calibrated points on screen)
+echo   9. Run tests         (pytest)
+echo   I. Install / upgrade Python deps
 echo   0. Exit
 echo -----------------------------------------------------
 set /p "choice=Select: "
 
-if "%choice%"=="1" goto calibrate
-if "%choice%"=="2" goto validate
-if "%choice%"=="3" goto pricedebug
-if "%choice%"=="4" goto paper
-if "%choice%"=="5" goto armed
-if "%choice%"=="6" goto replay
-if "%choice%"=="7" goto overlay
-if "%choice%"=="8" goto tests
-if "%choice%"=="9" goto deps
+if "%choice%"=="1" goto ui
+if "%choice%"=="2" goto calibrate
+if "%choice%"=="3" goto validate
+if "%choice%"=="4" goto pricedebug
+if "%choice%"=="5" goto paper
+if "%choice%"=="6" goto armed
+if "%choice%"=="7" goto replay
+if "%choice%"=="8" goto overlay
+if "%choice%"=="9" goto tests
+if /I "%choice%"=="I" goto deps
 if "%choice%"=="0" goto end
+goto menu
+
+:ui
+"%PY%" -m app.ui.run_ui
 goto menu
 
 :calibrate
