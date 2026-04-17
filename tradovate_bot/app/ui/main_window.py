@@ -9,15 +9,16 @@ import logging
 from typing import Optional
 
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-                               QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout,
-                               QWidget)
+                               QMainWindow, QMenuBar, QMessageBox, QStackedWidget,
+                               QVBoxLayout, QWidget)
 
 from app.ui.app_signals import AppSignals
 from app.ui.controller import UiController
 from app.ui.ui_state import UiState
 from app.ui.widgets.emergency_strip import EmergencyStrip
+from app.ui.widgets.floating_hud import FloatingHud
 from app.ui.widgets.top_bar import TopBar
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,10 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Tradovate UI bot — control panel")
         self.resize(1280, 820)
+
+        # floating always-on-top HUD, initially hidden
+        self._hud: FloatingHud | None = None
+        self._build_menu()
 
         central = QWidget(self)
         outer = QVBoxLayout(central)
@@ -71,6 +76,10 @@ class MainWindow(QMainWindow):
         halt_shortcut = QShortcut(QKeySequence("Ctrl+H"), self)
         halt_shortcut.activated.connect(self._on_halt)
 
+        # Ctrl+Shift+H toggles the floating HUD
+        hud_shortcut = QShortcut(QKeySequence("Ctrl+Shift+H"), self)
+        hud_shortcut.activated.connect(self.toggle_hud)
+
         # signal wiring
         self.signals.mode_changed.connect(self._on_mode_changed)
         self.signals.armed_changed.connect(self._on_armed_changed)
@@ -78,8 +87,54 @@ class MainWindow(QMainWindow):
         self.signals.health_updated.connect(self._on_health_updated)
         self.signals.anchor_guard_changed.connect(self._on_anchor_changed)
         self.signals.controller_state_changed.connect(self._on_controller_state)
+        self.signals.hud_show_main_requested.connect(self._on_hud_show_main)
 
         self._update_top_from_state()
+
+    # ---- menu + HUD ---- #
+
+    def _build_menu(self) -> None:
+        mbar = self.menuBar()
+        view = mbar.addMenu("&View")
+
+        self._hud_action = QAction("Show floating &HUD", self)
+        self._hud_action.setCheckable(True)
+        self._hud_action.setShortcut(QKeySequence("Ctrl+Shift+H"))
+        self._hud_action.triggered.connect(self._on_hud_action)
+        view.addAction(self._hud_action)
+
+        reset_hud = QAction("Reset HUD position", self)
+        reset_hud.triggered.connect(self._reset_hud_position)
+        view.addAction(reset_hud)
+
+    def toggle_hud(self) -> None:
+        """Toggle HUD visibility. Create it lazily on first show."""
+        if self._hud is None:
+            self._hud = FloatingHud(self.signals, self.state)
+            self._hud.place_default()
+            self._hud.show()
+        elif self._hud.isVisible():
+            self._hud.hide()
+        else:
+            self._hud.show()
+        if hasattr(self, "_hud_action"):
+            self._hud_action.setChecked(self._hud is not None and self._hud.isVisible())
+
+    def _on_hud_action(self, checked: bool) -> None:
+        if checked and (self._hud is None or not self._hud.isVisible()):
+            self.toggle_hud()
+        elif not checked and self._hud is not None and self._hud.isVisible():
+            self._hud.hide()
+
+    def _reset_hud_position(self) -> None:
+        if self._hud is not None:
+            self._hud.place_default()
+
+    @Slot()
+    def _on_hud_show_main(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     # ---- navigation ---- #
 
@@ -175,4 +230,9 @@ class MainWindow(QMainWindow):
             self.controller.stop()
         except Exception:
             log.exception("controller.stop raised on close")
+        if self._hud is not None:
+            try:
+                self._hud.close()
+            except Exception:
+                pass
         super().closeEvent(event)

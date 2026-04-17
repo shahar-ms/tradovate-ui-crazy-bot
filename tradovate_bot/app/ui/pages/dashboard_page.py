@@ -39,7 +39,13 @@ class DashboardPage(QWidget):
         self.btn_paper = QPushButton("Start Paper Mode")
         self.btn_arm = QPushButton("Arm Live Trading")
         self.btn_stop = QPushButton("Stop Bot")
-        for b in (self.btn_price, self.btn_paper, self.btn_arm, self.btn_stop):
+        self.btn_hud = QPushButton("Show Floating HUD")
+        self.btn_hud.setToolTip(
+            "Open a small always-on-top HUD with mode, price, position and last ack.\n"
+            "Park it over an empty spot of the Tradovate screen.\n"
+            "Shortcut: Ctrl+Shift+H"
+        )
+        for b in (self.btn_price, self.btn_paper, self.btn_arm, self.btn_stop, self.btn_hud):
             b.setMinimumHeight(34)
             btn_row.addWidget(b)
         self.btn_price.setProperty("role", "primary")
@@ -80,6 +86,7 @@ class DashboardPage(QWidget):
         self.btn_paper.clicked.connect(lambda: self._start_mode("PAPER"))
         self.btn_arm.clicked.connect(self._try_arm)
         self.btn_stop.clicked.connect(self._stop)
+        self.btn_hud.clicked.connect(self._toggle_hud)
 
         self.signals.event_logged.connect(self._on_event_logged)
         self.signals.mode_changed.connect(lambda _m: self._refresh_buttons())
@@ -264,6 +271,12 @@ class DashboardPage(QWidget):
     def _stop(self) -> None:
         self.controller.stop()
         self._refresh_buttons()
+
+    def _toggle_hud(self) -> None:
+        # Walk up the parent chain to find the MainWindow.
+        w = self.window()
+        if hasattr(w, "toggle_hud"):
+            w.toggle_hud()
 
     # ---- helpers ---- #
 

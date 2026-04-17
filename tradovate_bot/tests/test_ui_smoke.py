@@ -174,6 +174,91 @@ def test_logs_page_appends_events(qtbot):
     assert page.halt_events.rowCount() >= 1
 
 
+def test_floating_hud_reflects_state(qtbot):
+    from app.ui.widgets.floating_hud import FloatingHud
+
+    signals = AppSignals()
+    state = UiState()
+    state.mode = "PAPER"
+    state.last_price = 19234.25
+    state.last_confidence = 91.0
+    state.price_stream_health = "ok"
+    state.position_side = "long"
+    state.last_intent_action = "BUY"
+    state.last_ack_status = "ok"
+
+    hud = FloatingHud(signals, state)
+    hud._refresh_timer.stop()
+    qtbot.addWidget(hud)
+    hud._refresh_from_state()
+
+    assert hud._mode_lbl.text() == "PAPER"
+    assert hud._price_lbl.text() == "19234.25"
+    assert "ok" in hud._health_lbl.text()
+    assert "long" in hud._pos_lbl.text()
+    assert "BUY" in hud._intent_lbl.text()
+    assert "ok" in hud._ack_lbl.text()
+    # use isHidden() because isVisible() also reports False for unshown parents
+    assert hud._halt_lbl.isHidden()
+
+
+def test_floating_hud_halted_shows_banner(qtbot):
+    from app.ui.widgets.floating_hud import FloatingHud
+
+    signals = AppSignals()
+    state = UiState()
+    state.halted = True
+    state.halt_reason = "anchor_drift"
+    hud = FloatingHud(signals, state)
+    hud._refresh_timer.stop()
+    qtbot.addWidget(hud)
+    hud._refresh_from_state()
+
+    assert not hud._halt_lbl.isHidden()
+    assert "anchor_drift" in hud._halt_lbl.text()
+
+
+def test_floating_hud_default_position_left_middle(qtbot):
+    from app.ui.widgets.floating_hud import FloatingHud, HUD_HEIGHT, HUD_LEFT_MARGIN
+    from PySide6.QtGui import QGuiApplication
+
+    signals = AppSignals()
+    state = UiState()
+    hud = FloatingHud(signals, state)
+    hud._refresh_timer.stop()
+    qtbot.addWidget(hud)
+    hud.place_default()
+
+    screen = QGuiApplication.primaryScreen()
+    geom = screen.availableGeometry()
+    expected_x = geom.left() + HUD_LEFT_MARGIN
+    assert hud.x() == expected_x
+    # y must be below the midpoint of the screen (middle-low)
+    assert hud.y() > geom.top() + geom.height() // 2 - HUD_HEIGHT
+
+
+def test_main_window_toggle_hud_creates_and_hides(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: QMessageBox.Ok)
+
+    signals = AppSignals()
+    state = UiState()
+    controller = UiController(signals=signals, state=state)
+    window = MainWindow(signals, state, controller)
+    qtbot.addWidget(window)
+
+    # no HUD initially
+    assert window._hud is None
+    window.toggle_hud()
+    assert window._hud is not None
+    assert window._hud.isVisible()
+    qtbot.addWidget(window._hud)
+    window._hud._refresh_timer.stop()
+
+    window.toggle_hud()
+    assert not window._hud.isVisible()
+
+
 def test_calibration_clear_uses_items_list_selection(qtbot, monkeypatch):
     """Clearing should respect the row selected in the 'Marked items' list."""
     from PySide6.QtWidgets import QMessageBox

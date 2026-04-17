@@ -42,6 +42,9 @@ class AppSignals(QObject):
     # connection to runtime (controller lifecycle)
     controller_state_changed = Signal(str)     # "stopped" | "running" | "error"
 
+    # floating HUD -> main window
+    hud_show_main_requested = Signal()
+
 
 # Convenience helper for emitting an event log row from anywhere.
 def emit_event(signals: AppSignals, level: str, source: str, message: str) -> None:
