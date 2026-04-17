@@ -24,12 +24,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 import mss
 import numpy as np
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMessageBox, QPushButton, QSplitter,
@@ -39,11 +39,14 @@ from app.calibration.validator import validate_calibration
 from app.models.common import Point, Region, ScreenMap
 from app.models.config import save_model_json
 from app.ui.app_signals import AppSignals, emit_event
+from app.ui.dialogs.window_picker_dialog import WindowPickerDialog
 from app.ui.widgets.calibration_canvas import CalibrationCanvas, CanvasOverlay
 from app.ui.widgets.labeled_value import LabeledValue
 from app.ui.widgets.panel import Panel
 from app.utils import image_utils as iu
 from app.utils import paths
+
+COUNTDOWN_SECONDS = 3
 
 log = logging.getLogger(__name__)
 
@@ -94,10 +97,16 @@ class CalibrationPage(QWidget):
         self._populate_monitors()
         src_row.addWidget(self.monitor_combo)
 
-        self.btn_capture = QPushButton("Capture this machine's screen")
+        self.btn_capture = QPushButton(f"Capture screen ({COUNTDOWN_SECONDS}s delay)")
         self.btn_capture.setToolTip(
-            "Grab the current monitor of the PC running this UI.\n"
-            "Use this if Tradovate runs on the same PC as the bot."
+            f"Wait {COUNTDOWN_SECONDS} seconds so you can bring Tradovate to the front, "
+            "then grab the full monitor of the PC running this UI."
+        )
+        self.btn_capture_window = QPushButton("Capture specific window…")
+        self.btn_capture_window.setToolTip(
+            "Pick a window by title (e.g. Tradovate tab). The UI activates it, "
+            f"waits {COUNTDOWN_SECONDS} seconds, then captures the full monitor. "
+            "Coordinates stay absolute so the bot can click correctly at runtime."
         )
         self.btn_load_file = QPushButton("Load screenshot from file…")
         self.btn_load_file.setToolTip(
@@ -109,6 +118,7 @@ class CalibrationPage(QWidget):
             "Clear the current screenshot + all marks so you can load a new one."
         )
         src_row.addWidget(self.btn_capture)
+        src_row.addWidget(self.btn_capture_window)
         src_row.addWidget(self.btn_load_file)
         src_row.addWidget(self.btn_reset_image)
 
@@ -194,8 +204,18 @@ class CalibrationPage(QWidget):
         splitter.setSizes([900, 380])
         root.addWidget(splitter, 1)
 
+        # --- countdown state --- #
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.setInterval(1000)
+        self._countdown_timer.timeout.connect(self._countdown_tick)
+        self._countdown_remaining: int = 0
+        self._countdown_default_label: str = self.btn_capture.text()
+        self._countdown_callback: Optional[Callable[[], None]] = None
+
         # --- wiring --- #
-        self.btn_capture.clicked.connect(self._capture_monitor)
+        self.btn_capture.clicked.connect(lambda: self._start_countdown(
+            on_zero=self._grab_full_monitor, label_prefix="Capturing in"))
+        self.btn_capture_window.clicked.connect(self._capture_specific_window)
         self.btn_load_file.clicked.connect(self._load_from_file)
         self.btn_reset_image.clicked.connect(self._reset_image)
         self.btn_start_mark.clicked.connect(self._start_mark)
@@ -235,7 +255,53 @@ class CalibrationPage(QWidget):
 
     # ---- image sources ---- #
 
-    def _capture_monitor(self) -> None:
+    def _start_countdown(self, on_zero: Callable[[], None],
+                         label_prefix: str = "Capturing in",
+                         seconds: int = COUNTDOWN_SECONDS) -> None:
+        """Begin a non-blocking countdown, then call on_zero()."""
+        if self.monitor_combo.currentData() is None:
+            QMessageBox.warning(self, "No monitor", "No monitor selected")
+            return
+        if self._countdown_timer.isActive():
+            return  # already counting
+        self._countdown_remaining = seconds
+        self._countdown_callback = on_zero
+        self._countdown_default_label = self.btn_capture.text()
+        self._set_countdown_active(True, f"{label_prefix} {self._countdown_remaining}…")
+        # fire first tick immediately (so the first visible second counts down
+        # from N-1 to 0 at the expected wall-clock pace)
+        self._countdown_timer.start()
+
+    def _countdown_tick(self) -> None:
+        self._countdown_remaining -= 1
+        if self._countdown_remaining <= 0:
+            self._countdown_timer.stop()
+            cb = self._countdown_callback
+            self._countdown_callback = None
+            self._set_countdown_active(False)
+            if cb is not None:
+                try:
+                    cb()
+                except Exception as e:
+                    log.exception("countdown callback raised")
+                    QMessageBox.critical(self, "Capture failed", str(e))
+            return
+        self.btn_capture.setText(f"Capturing in {self._countdown_remaining}…")
+
+    def _set_countdown_active(self, active: bool, label_override: Optional[str] = None) -> None:
+        """Disable other entry points while a countdown is running."""
+        if active:
+            self.btn_capture.setText(label_override or self.btn_capture.text())
+        else:
+            self.btn_capture.setText(self._countdown_default_label)
+        for w in (self.btn_capture, self.btn_capture_window, self.btn_load_file,
+                  self.btn_reset_image):
+            w.setEnabled(not active)
+        if not active:
+            # restore normal disable/enable rules
+            self._refresh_image_buttons()
+
+    def _grab_full_monitor(self) -> None:
         idx = self.monitor_combo.currentData()
         if idx is None:
             QMessageBox.warning(self, "No monitor", "No monitor selected")
@@ -253,6 +319,30 @@ class CalibrationPage(QWidget):
                         size=(int(mon["width"]), int(mon["height"])))
         emit_event(self.signals, "info", "calibration",
                    f"captured monitor {idx}: {self._monitor_size[0]}x{self._monitor_size[1]}")
+
+    def _capture_specific_window(self) -> None:
+        """Pick a window by title, activate it, countdown, then capture full monitor."""
+        dlg = WindowPickerDialog(self)
+        if not dlg.exec():
+            return
+        choice = dlg.selected_choice
+        if choice is None:
+            return
+
+        err = WindowPickerDialog.activate(choice)
+        if err is not None:
+            QMessageBox.warning(
+                self, "Activate failed",
+                f"Could not activate {choice.title!r}:\n{err}\n\n"
+                "Bring it to the front manually during the countdown."
+            )
+
+        # small 100ms grace so Windows finishes the focus switch before the
+        # countdown begins; then the normal 3-second countdown runs.
+        QTimer.singleShot(100, lambda: self._start_countdown(
+            on_zero=self._grab_full_monitor,
+            label_prefix=f"Capturing ({choice.title[:30]}) in",
+        ))
 
     def _load_from_file(self) -> None:
         start_dir = str(paths.screenshots_dir())
@@ -336,6 +426,7 @@ class CalibrationPage(QWidget):
     def _refresh_image_buttons(self) -> None:
         loaded = self._full_image is not None
         self.btn_capture.setEnabled(not loaded)
+        self.btn_capture_window.setEnabled(not loaded)
         self.btn_load_file.setEnabled(not loaded)
         self.btn_reset_image.setEnabled(loaded)
 

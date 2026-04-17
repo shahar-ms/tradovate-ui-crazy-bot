@@ -247,6 +247,70 @@ def test_calibration_clear_falls_back_to_combo(qtbot, monkeypatch):
     assert page.targets.buy is None
 
 
+def test_calibration_countdown_updates_label_and_fires_callback(qtbot, monkeypatch):
+    """Start a countdown, manually tick it, confirm the callback fires."""
+    from app.ui.pages.calibration_page import CalibrationPage
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    fired = {"count": 0}
+    page._start_countdown(on_zero=lambda: fired.__setitem__("count", fired["count"] + 1),
+                          label_prefix="Capturing in", seconds=3)
+    # label is set to initial seconds value
+    assert "3" in page.btn_capture.text()
+    # simulate three ticks
+    page._countdown_tick()
+    assert "2" in page.btn_capture.text()
+    page._countdown_tick()
+    assert "1" in page.btn_capture.text()
+    page._countdown_tick()
+    # callback must have fired exactly once
+    assert fired["count"] == 1
+    # and the button label is restored
+    assert page.btn_capture.text() == page._countdown_default_label
+
+
+def test_calibration_countdown_disables_other_buttons(qtbot):
+    from app.ui.pages.calibration_page import CalibrationPage
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    page._start_countdown(on_zero=lambda: None, label_prefix="Capturing in", seconds=2)
+    assert not page.btn_capture.isEnabled()
+    assert not page.btn_capture_window.isEnabled()
+    assert not page.btn_load_file.isEnabled()
+
+    # drain the countdown
+    page._countdown_tick()
+    page._countdown_tick()
+    # buttons restored (no image loaded -> capture/load enabled, reset disabled)
+    assert page.btn_capture.isEnabled()
+    assert page.btn_capture_window.isEnabled()
+    assert page.btn_load_file.isEnabled()
+    assert not page.btn_reset_image.isEnabled()
+
+
+def test_calibration_countdown_ignored_while_already_running(qtbot):
+    from app.ui.pages.calibration_page import CalibrationPage
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    calls = []
+    page._start_countdown(on_zero=lambda: calls.append("first"), seconds=3)
+    # second call while first is running must be a no-op
+    page._start_countdown(on_zero=lambda: calls.append("second"), seconds=3)
+    page._countdown_tick()
+    page._countdown_tick()
+    page._countdown_tick()
+    assert calls == ["first"]
+
+
 def test_calibration_image_buttons_toggle(qtbot):
     import numpy as np
     from app.ui.pages.calibration_page import CalibrationPage
