@@ -26,6 +26,7 @@ from app.ui.main_window import MainWindow  # noqa: E402
 from app.ui.pages.calibration_page import CalibrationPage  # noqa: E402
 from app.ui.pages.dashboard_page import DashboardPage  # noqa: E402
 from app.ui.pages.execution_page import ExecutionPage  # noqa: E402
+from app.ui.pages.getting_started_page import GettingStartedPage  # noqa: E402
 from app.ui.pages.logs_page import LogsPage  # noqa: E402
 from app.ui.pages.run_control_page import RunControlPage  # noqa: E402
 from app.ui.pages.strategy_page import StrategyPage  # noqa: E402
@@ -51,7 +52,8 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(signals, state, controller)
 
-    # build pages in nav order
+    # build pages — Getting Started first so the user always has a default path forward
+    getting_started = GettingStartedPage(signals, state, controller)
     dashboard = DashboardPage(signals, state, controller)
     calibration = CalibrationPage(signals)
     strategy = StrategyPage(signals)
@@ -59,12 +61,17 @@ def main(argv: list[str] | None = None) -> int:
     logs = LogsPage(signals)
     run_ctrl = RunControlPage(signals, state, controller)
 
+    window.add_page("Getting started", getting_started)
     window.add_page("Dashboard",   dashboard)
-    window.add_page("Calibration", calibration)
+    calib_idx = window.add_page("Calibration", calibration)
     window.add_page("Strategy",    strategy)
     window.add_page("Execution",   execution)
     window.add_page("Logs",        logs)
     window.add_page("Run control", run_ctrl)
+
+    # Let the wizard navigate to the calibration page robustly
+    window._calibration_index = calib_idx  # type: ignore[attr-defined]
+    window.go_to(0)
 
     window.show()
     return app.exec()

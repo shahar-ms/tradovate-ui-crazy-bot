@@ -192,6 +192,7 @@ class UiController(QObject):
             self.signals.signal_emitted.emit(intent.model_dump())
             self.state.last_intent_action = intent.action
             self.state.last_intent_reason = intent.reason
+            self.state.signals_emitted_count += 1
             emit_event(self.signals, "info", "strategy",
                        f"{intent.action} ({intent.reason})")
         except Exception:

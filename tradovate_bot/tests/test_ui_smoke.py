@@ -87,6 +87,8 @@ def test_main_window_builds_with_all_pages(qtbot, monkeypatch):
     window = MainWindow(signals, state, controller)
     qtbot.addWidget(window)
 
+    from app.ui.pages.getting_started_page import GettingStartedPage
+    getting = GettingStartedPage(signals, state, controller)
     dashboard = DashboardPage(signals, state, controller)
     calibration = CalibrationPage(signals)
     strategy = StrategyPage(signals)
@@ -96,7 +98,7 @@ def test_main_window_builds_with_all_pages(qtbot, monkeypatch):
 
     # stop every page's auto-refresh QTimer so the test doesn't depend on
     # the event loop running
-    for page in (dashboard, run_ctrl):
+    for page in (dashboard, run_ctrl, getting):
         if hasattr(page, "_refresh_timer"):
             page._refresh_timer.stop()
         if hasattr(page, "_timer"):
@@ -104,6 +106,7 @@ def test_main_window_builds_with_all_pages(qtbot, monkeypatch):
     if hasattr(logs, "_refresh_screens_timer"):
         logs._refresh_screens_timer.stop()
 
+    window.add_page("Getting started", getting)
     window.add_page("Dashboard", dashboard)
     window.add_page("Calibration", calibration)
     window.add_page("Strategy", strategy)
@@ -114,7 +117,7 @@ def test_main_window_builds_with_all_pages(qtbot, monkeypatch):
     # can switch to every page without a crash
     for i in range(window.nav.count()):
         window.go_to(i)
-    assert window.stack.count() == 6
+    assert window.stack.count() == 7
 
     # simulate events through the signal bus
     emit_event(signals, "info", "test", "hello from tests")
@@ -172,6 +175,101 @@ def test_logs_page_appends_events(qtbot):
     assert page.price_events.rowCount() >= 1
     assert page.exec_events.rowCount() >= 1
     assert page.halt_events.rowCount() >= 1
+
+
+def test_getting_started_steps_follow_user_progress(qtbot, monkeypatch):
+    """Verify the wizard tracks the three guided milestones correctly."""
+    from app.ui.pages.getting_started_page import GettingStartedPage
+
+    signals = AppSignals()
+    state = UiState()
+    controller = UiController(signals=signals, state=state)
+    page = GettingStartedPage(signals, state, controller)
+    page._timer.stop()
+    qtbot.addWidget(page)
+
+    # scenario A: nothing done -> step 1 pending + active, 2 and 3 pending+inactive
+    # force screen_map "missing" to avoid relying on real filesystem state
+    from app.utils import paths
+    import pathlib
+
+    class FakePath:
+        def exists(self):
+            return False
+
+    monkeypatch.setattr(paths, "screen_map_path", lambda: FakePath())
+    page._refresh()
+    assert page._active_step == 1
+    assert not page.step2.action_btn.isEnabled()
+    assert not page.step3.action_btn.isEnabled()
+    assert page.step1.action_btn.isEnabled()
+
+    # scenario B: calibration "done" via mocked validator
+    class TruePath:
+        def exists(self):
+            return True
+
+    monkeypatch.setattr(paths, "screen_map_path", lambda: TruePath())
+
+    class FakeReport:
+        ready = True
+        lines = ["[OK] all good", "READY_FOR_FILE_02 = true"]
+
+    from app.ui.pages import getting_started_page as gsp_mod
+    monkeypatch.setattr(gsp_mod, "validate_calibration", lambda offline=False: FakeReport())
+
+    # still need to flow ticks for step 2
+    state.mode = "PRICE_DEBUG"
+    state.price_stream_health = "ok"
+    state.accepted_tick_count = 3  # below threshold
+    page._refresh()
+    assert page._active_step == 2
+    assert page.step2.action_btn.isEnabled()
+    assert not page.step3.action_btn.isEnabled()
+
+    # scenario C: enough ticks -> step 2 done, step 3 becomes active
+    state.accepted_tick_count = 15
+    state.mode = "PAPER"
+    state.signals_emitted_count = 0
+    page._refresh()
+    assert page._active_step == 3
+    assert page.step3.action_btn.isEnabled()
+
+    # scenario D: a signal fires -> step 3 done, all three green
+    state.signals_emitted_count = 1
+    page._refresh()
+    s3 = page._step3_status()
+    assert s3.is_done
+
+
+def test_getting_started_step_status_helpers(qtbot, monkeypatch, tmp_path):
+    from app.ui.pages.getting_started_page import GettingStartedPage, MIN_TICKS_TO_PASS
+
+    signals = AppSignals()
+    state = UiState()
+    controller = UiController(signals=signals, state=state)
+    page = GettingStartedPage(signals, state, controller)
+    page._timer.stop()
+    qtbot.addWidget(page)
+
+    # step 2 not-started when DISCONNECTED
+    state.mode = "DISCONNECTED"
+    s2 = page._step2_status()
+    assert not s2.is_done
+    assert "not running" in s2.headline
+
+    # step 2 active but not done when ticks below threshold
+    state.mode = "PRICE_DEBUG"
+    state.accepted_tick_count = MIN_TICKS_TO_PASS - 1
+    state.price_stream_health = "ok"
+    s2b = page._step2_status()
+    assert not s2b.is_done
+    assert s2b.state == "active"
+
+    # step 2 done when threshold hit + health ok
+    state.accepted_tick_count = MIN_TICKS_TO_PASS
+    s2c = page._step2_status()
+    assert s2c.is_done
 
 
 def test_floating_hud_reflects_state(qtbot):
