@@ -34,7 +34,7 @@ from typing import Optional
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
-                               QVBoxLayout, QWidget)
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from app.ui.app_signals import AppSignals
 from app.ui.theme import (ARM_ORANGE, BORDER, BROKEN_RED, CANCEL_YELLOW,
@@ -47,6 +47,8 @@ log = logging.getLogger(__name__)
 
 HUD_WIDTH = 330
 HUD_HEIGHT = 440
+HUD_COMPACT_WIDTH = 210
+HUD_COMPACT_HEIGHT = 38
 HUD_LEFT_MARGIN = 20
 HUD_VERTICAL_PCT = 0.55   # center-ish of the left edge
 
@@ -71,6 +73,8 @@ class FloatingHud(QWidget):
         )
         self.setWindowFlags(flags)
         self.setWindowTitle("Tradovate bot")
+        # size is switched between expanded and compact via _set_minimized
+        self._minimized: bool = False
         self.setFixedSize(HUD_WIDTH, HUD_HEIGHT)
 
         self._drag_origin: Optional[QPoint] = None
@@ -92,11 +96,30 @@ class FloatingHud(QWidget):
     # ---- layout ---- #
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        # outer layout: a single stacked widget swapping between expanded + compact
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._stack = QStackedWidget()
+        outer.addWidget(self._stack)
+
+        self._expanded_page = QWidget()
+        self._build_expanded_page(self._expanded_page)
+        self._stack.addWidget(self._expanded_page)
+
+        self._compact_page = QWidget()
+        self._build_compact_page(self._compact_page)
+        self._stack.addWidget(self._compact_page)
+
+        self._stack.setCurrentIndex(0)   # expanded by default
+
+    def _build_expanded_page(self, page: QWidget) -> None:
+        root = QVBoxLayout(page)
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(6)
 
-        # row 1: title + mode + drag + close
+        # row 1: title + mode + drag + minimize (no close X — exit via right-click menu)
         row1 = QHBoxLayout()
         row1.setSpacing(6)
         title = QLabel("BOT")
@@ -113,13 +136,13 @@ class FloatingHud(QWidget):
         self._drag_hint.setStyleSheet(f"color: {INACTIVE_GRAY}; font-size: 14px;")
         row1.addWidget(self._drag_hint)
 
-        self._close_btn = QLabel("✕")
-        self._close_btn.setStyleSheet(
-            f"color: {TEXT_MUTED}; font-size: 14px; padding-left: 6px;"
+        self._minimize_btn = QLabel("−")
+        self._minimize_btn.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 18px; font-weight: 700; padding: 0 6px;"
         )
-        self._close_btn.setToolTip("Exit the bot")
-        self._close_btn.mousePressEvent = lambda e: self.close()  # type: ignore[assignment]
-        row1.addWidget(self._close_btn)
+        self._minimize_btn.setToolTip("Minimize to compact block. Click the block to expand again.")
+        self._minimize_btn.mousePressEvent = lambda e: self._set_minimized(True)  # type: ignore[assignment]
+        row1.addWidget(self._minimize_btn)
         root.addLayout(row1)
 
         # row 2: big price
@@ -221,6 +244,74 @@ class FloatingHud(QWidget):
 
         root.addStretch(1)
 
+    def _build_compact_page(self, page: QWidget) -> None:
+        """
+        Small-but-noticeable block shown when the HUD is minimized.
+        One horizontal row: [status dot] MODE  PRICE  pos  [+]
+        Click anywhere on the block to expand back.
+        """
+        root = QHBoxLayout(page)
+        root.setContentsMargins(10, 4, 10, 4)
+        root.setSpacing(8)
+
+        self._compact_dot = QLabel("●")
+        self._compact_dot.setStyleSheet(
+            f"color: {INACTIVE_GRAY}; font-size: 16px;"
+        )
+        root.addWidget(self._compact_dot)
+
+        self._compact_mode = QLabel("BOT")
+        self._compact_mode.setStyleSheet(
+            "font-weight: 700; font-size: 11px; letter-spacing: 1px;"
+        )
+        root.addWidget(self._compact_mode)
+
+        self._compact_price = QLabel("—")
+        self._compact_price.setStyleSheet("font-size: 14px; font-weight: 700;")
+        self._compact_price.setAlignment(Qt.AlignCenter)
+        root.addWidget(self._compact_price, 1)
+
+        self._compact_pos = QLabel("flat")
+        self._compact_pos.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        root.addWidget(self._compact_pos)
+
+        self._expand_btn = QLabel("⛶")
+        self._expand_btn.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 14px; font-weight: 700; padding: 0 4px;"
+        )
+        self._expand_btn.setToolTip("Expand HUD")
+        self._expand_btn.mousePressEvent = lambda e: self._set_minimized(False)  # type: ignore[assignment]
+        root.addWidget(self._expand_btn)
+        # double-click anywhere on the block = expand
+        page.mouseDoubleClickEvent = lambda e: self._set_minimized(False)  # type: ignore[assignment]
+
+    def _set_minimized(self, minimized: bool) -> None:
+        """Swap between expanded (full HUD) and compact (small block) views."""
+        if minimized == self._minimized:
+            return
+        self._minimized = minimized
+        self._stack.setCurrentIndex(1 if minimized else 0)
+        if minimized:
+            self.setFixedSize(HUD_COMPACT_WIDTH, HUD_COMPACT_HEIGHT)
+        else:
+            self.setFixedSize(HUD_WIDTH, HUD_HEIGHT)
+        # refresh so the compact row reflects current state immediately
+        self._refresh_all()
+        # clamp back on-screen in case the new size would push it off
+        self._clamp_to_screen()
+        self.save_position()
+
+    def _clamp_to_screen(self) -> None:
+        screen = QGuiApplication.screenAt(self.frameGeometry().topLeft()) \
+                 or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        g = screen.availableGeometry()
+        x = max(g.left(), min(self.x(), g.right() - self.width()))
+        y = max(g.top(), min(self.y(), g.bottom() - self.height()))
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
+
     def _sep(self) -> QFrame:
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -308,12 +399,17 @@ class FloatingHud(QWidget):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
             x, y = int(d["x"]), int(d["y"])
+            # restore minimized state first so size is correct when clamping
+            if bool(d.get("minimized", False)):
+                self._set_minimized(True)
+            w = self.width()
+            h = self.height()
             # clamp to current virtual screen
             screen = QGuiApplication.screenAt(QPoint(x, y)) or QGuiApplication.primaryScreen()
             if screen is not None:
                 g = screen.availableGeometry()
-                x = max(g.left(), min(x, g.right() - HUD_WIDTH))
-                y = max(g.top(), min(y, g.bottom() - HUD_HEIGHT))
+                x = max(g.left(), min(x, g.right() - w))
+                y = max(g.top(), min(y, g.bottom() - h))
             self.move(x, y)
             return True
         except Exception:
@@ -322,7 +418,11 @@ class FloatingHud(QWidget):
     def save_position(self) -> None:
         p = self._position_path()
         try:
-            p.write_text(json.dumps({"x": self.x(), "y": self.y()}), encoding="utf-8")
+            p.write_text(
+                json.dumps({"x": self.x(), "y": self.y(),
+                            "minimized": self._minimized}),
+                encoding="utf-8",
+            )
         except Exception:
             log.debug("failed to save HUD position", exc_info=True)
 
@@ -427,6 +527,46 @@ class FloatingHud(QWidget):
         self._halt_btn.setEnabled(running)
         self._setup_btn.setEnabled(True)
 
+        # --- keep the compact view in sync too --- #
+        self._refresh_compact(s)
+
+    def _refresh_compact(self, s: UiState) -> None:
+        """Keep the minimized block's labels up to date."""
+        # color dot: red if halted, yellow if paused/armed, green if running ok
+        if s.halted:
+            dot_color = BROKEN_RED
+        elif s.paused:
+            dot_color = DEGRADED_YELLOW
+        elif s.armed:
+            dot_color = DEGRADED_YELLOW
+        elif s.mode in ("PAPER", "PRICE_DEBUG"):
+            dot_color = OK_GREEN
+        else:
+            dot_color = INACTIVE_GRAY
+        self._compact_dot.setStyleSheet(f"color: {dot_color}; font-size: 16px;")
+
+        # mode text
+        mode_text = "HALTED" if s.halted else ("PAUSED" if s.paused else s.mode)
+        self._compact_mode.setText(mode_text)
+        self._compact_mode.setStyleSheet(
+            f"font-weight: 700; font-size: 11px; letter-spacing: 1px; color: {dot_color};"
+        )
+
+        # price
+        self._compact_price.setText(f"{s.last_price:.2f}"
+                                    if s.last_price is not None else "—")
+
+        # position
+        if s.position_side == "flat":
+            self._compact_pos.setText("flat")
+            self._compact_pos.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        else:
+            side_color = OK_GREEN if s.position_side == "long" else BROKEN_RED
+            self._compact_pos.setText(s.position_side.upper())
+            self._compact_pos.setStyleSheet(
+                f"color: {side_color}; font-size: 11px; font-weight: 700;"
+            )
+
     @staticmethod
     def _mode_color(s: UiState) -> str:
         if s.halted or s.mode == "HALTED":
@@ -503,6 +643,10 @@ class FloatingHud(QWidget):
 
     def contextMenuEvent(self, e) -> None:  # noqa: N802
         menu = QMenu(self)
+
+        toggle_act = QAction("Expand HUD" if self._minimized else "Minimize HUD", menu)
+        toggle_act.triggered.connect(lambda: self._set_minimized(not self._minimized))
+        menu.addAction(toggle_act)
 
         reset = QAction("Reset position", menu)
         reset.triggered.connect(lambda: (self.place_default(), self.save_position()))

@@ -244,6 +244,84 @@ def test_toast_appears_on_manual_rejected(qtbot):
     assert "position active" in hud._toast_lbl.text()
 
 
+def test_hud_starts_expanded(qtbot):
+    hud, _, _ = _build_hud(qtbot)
+    assert hud._minimized is False
+    assert hud._stack.currentIndex() == 0
+    assert hud.width() == 330  # HUD_WIDTH
+
+
+def test_hud_minimize_shrinks_and_swaps_view(qtbot):
+    from app.ui.widgets.floating_hud import HUD_COMPACT_HEIGHT, HUD_COMPACT_WIDTH
+    hud, _, _ = _build_hud(qtbot)
+    hud._set_minimized(True)
+    assert hud._minimized is True
+    assert hud._stack.currentIndex() == 1
+    assert hud.width() == HUD_COMPACT_WIDTH
+    assert hud.height() == HUD_COMPACT_HEIGHT
+
+
+def test_hud_expand_from_minimized(qtbot):
+    from app.ui.widgets.floating_hud import HUD_HEIGHT, HUD_WIDTH
+    hud, _, _ = _build_hud(qtbot)
+    hud._set_minimized(True)
+    hud._set_minimized(False)
+    assert hud._minimized is False
+    assert hud._stack.currentIndex() == 0
+    assert (hud.width(), hud.height()) == (HUD_WIDTH, HUD_HEIGHT)
+
+
+def test_hud_set_minimized_is_idempotent(qtbot):
+    hud, _, _ = _build_hud(qtbot)
+    hud._set_minimized(True)
+    idx_before = hud._stack.currentIndex()
+    hud._set_minimized(True)  # same state — no-op
+    assert hud._stack.currentIndex() == idx_before
+
+
+def test_hud_compact_view_reflects_state(qtbot):
+    hud, _, state = _build_hud(qtbot)
+    state.mode = "PAPER"
+    state.last_price = 19234.25
+    state.position_side = "long"
+    hud._set_minimized(True)
+    hud._refresh_all()
+    assert hud._compact_price.text() == "19234.25"
+    assert hud._compact_mode.text() == "PAPER"
+    assert hud._compact_pos.text() == "LONG"
+
+
+def test_hud_compact_shows_halted(qtbot):
+    hud, _, state = _build_hud(qtbot)
+    state.halted = True
+    state.halt_reason = "execution_ack_unknown"
+    hud._set_minimized(True)
+    hud._refresh_all()
+    assert hud._compact_mode.text() == "HALTED"
+
+
+def test_hud_has_no_close_x_button(qtbot):
+    """User explicitly asked for the X to be removed from the HUD."""
+    hud, _, _ = _build_hud(qtbot)
+    assert not hasattr(hud, "_close_btn"), \
+        "_close_btn should have been removed — close via right-click > Exit app"
+
+
+def test_hud_saves_minimized_flag(qtbot, tmp_path, monkeypatch):
+    from app.utils import paths
+    monkeypatch.setattr(paths, "state_dir", lambda: tmp_path)
+
+    hud, _, _ = _build_hud(qtbot)
+    hud._set_minimized(True)
+    hud.save_position()
+    saved = json.loads((tmp_path / "hud_pos.json").read_text())
+    assert saved["minimized"] is True
+
+    hud2, _, _ = _build_hud(qtbot)
+    hud2._restore_saved_position()
+    assert hud2._minimized is True
+
+
 def test_hud_saves_and_restores_position(qtbot, tmp_path, monkeypatch):
     from app.utils import paths
     monkeypatch.setattr(paths, "state_dir", lambda: tmp_path)
@@ -255,7 +333,8 @@ def test_hud_saves_and_restores_position(qtbot, tmp_path, monkeypatch):
     hud.save_position()
 
     saved = json.loads((tmp_path / "hud_pos.json").read_text())
-    assert saved == {"x": 12, "y": 34}
+    assert saved["x"] == 12
+    assert saved["y"] == 34
 
     # a second HUD instance should restore that position
     hud2, _, _ = _build_hud(qtbot)
