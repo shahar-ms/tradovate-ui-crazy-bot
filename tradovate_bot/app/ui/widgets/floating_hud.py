@@ -668,25 +668,11 @@ class FloatingHud(QWidget):
     def _on_bot_toggle(self) -> None:
         """Single power toggle. ON = armed + strategy auto. OFF = disarmed
         (clicks can't reach Tradovate) + strategy silent. Price OCR runs
-        in both states.
-
-        Turning ON pops the ArmConfirmDialog once so the operator
-        explicitly acknowledges live execution. Turning OFF is instant
-        (it's the safer direction)."""
-        from app.ui.dialogs.arm_confirm_dialog import ArmConfirmDialog
+        in both states. Instant both ways — no confirmation popup."""
         if self.controller is None:
             return
         bot_is_on = bool(self.state.armed and self.state.auto_enabled)
-        if bot_is_on:
-            err = self.controller.turn_off()
-            if err:
-                self._show_toast(err)
-            return
-        # Turning ON — single confirmation path.
-        dlg = ArmConfirmDialog(self.controller, self.state, self)
-        if not dlg.exec():
-            return
-        err = self.controller.turn_on()
+        err = self.controller.turn_off() if bot_is_on else self.controller.turn_on()
         if err:
             self._show_toast(err)
 
