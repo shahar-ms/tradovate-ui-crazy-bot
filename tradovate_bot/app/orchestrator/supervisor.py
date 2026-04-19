@@ -95,6 +95,11 @@ class Supervisor:
         self._spawn("strategy", self._strategy_loop)
         self._spawn("executor", self._executor_loop)
         self._spawn("watchdog", self._watchdog_loop)
+        # Drain the command queue from its own thread too. main_loop() runs
+        # this on the CLI path, but the HUD app never calls main_loop(), so
+        # without this arm/disarm/halt/cancel_all would sit in the queue and
+        # never be processed.
+        self._spawn("commands", self._command_drain_loop)
 
     def stop(self, timeout: float = 3.0) -> None:
         log.info("Supervisor stopping")
@@ -338,6 +343,20 @@ class Supervisor:
                 _ = self.bus.ack_queue.get_nowait()
             except queue.Empty:
                 return
+
+    # ------------------- command drain ------------------- #
+
+    def _command_drain_loop(self) -> None:
+        """Pulls RuntimeCommands off the bus every 100ms and dispatches them.
+        main_loop() does the same thing on the CLI path; the HUD app skips
+        main_loop(), so without this dedicated thread arm / disarm / halt /
+        cancel_all submissions from the HUD would queue up and never run."""
+        while not self._stop.is_set():
+            try:
+                self._drain_commands()
+            except Exception:
+                log.exception("command drain failed")
+            time.sleep(0.1)
 
     # ------------------- watchdog ------------------- #
 

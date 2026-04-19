@@ -102,6 +102,33 @@ def test_to_execution_intent_mapping():
     assert sup._to_execution_intent(SignalIntent(action="CANCEL_ALL", reason="x")).action == "CANCEL_ALL"
 
 
+def test_command_drain_thread_processes_arm_without_main_loop():
+    """The HUD app never calls supervisor.main_loop(); commands submitted
+    from the HUD must still be processed. The dedicated command-drain
+    thread handles that. We start the supervisor (spawns the drain
+    thread), submit 'arm', and verify state.armed flips without us ever
+    calling main_loop()."""
+    import time as _time
+    sup = _make_supervisor(FakeExecutor())
+    # avoid spinning up the real PriceStream / strategy / executor loops
+    sup.start = lambda: None  # type: ignore[assignment]
+    # manually start just the command drain thread
+    import threading
+    t = threading.Thread(target=sup._command_drain_loop, daemon=True, name="cmd-drain")
+    t.start()
+    sup._threads.append(t)
+
+    assert not sup.state.armed
+    sup.submit_command("arm")
+    # the drain loop runs at 100ms. Give it a generous 400ms.
+    deadline = _time.time() + 0.4
+    while _time.time() < deadline and not sup.state.armed:
+        _time.sleep(0.02)
+    sup._stop.set()
+    t.join(timeout=0.5)
+    assert sup.state.armed, "arm command must be processed by the drain thread"
+
+
 def test_arm_works_from_price_debug():
     """The simplified HUD boots in PRICE_DEBUG and arms directly — there is
     no intermediate PAPER step anymore."""
