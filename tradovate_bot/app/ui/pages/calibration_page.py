@@ -315,34 +315,64 @@ class CalibrationPage(QWidget):
 
     def _hide_app_windows_for_capture(self) -> list:
         """
-        Hide every visible top-level Qt widget this app owns so that our own
-        pixels (calibration dialog, HUD, etc.) don't end up in the screen
-        capture. Returns a list of (widget, was_maximized, geometry) rows
-        so _restore_app_windows can put everything back faithfully.
+        Make every visible top-level Qt widget this app owns transparent so
+        its pixels don't contribute to the screen capture. We intentionally
+        use windowOpacity=0 instead of hide() because hide() plays badly
+        with a modal QDialog that's still in exec() — the dialog can fail
+        to come back to the foreground reliably on Windows.
+
+        With opacity=0 the widgets remain "shown" from Qt's perspective; the
+        modal event loop is unaffected and Windows' foreground-lock rules
+        don't get a chance to swallow a raise() call. mss reads the composed
+        screen via DWM, so a fully-transparent window contributes zero
+        pixels to the capture.
+
+        Returns a list of (widget, original_opacity) entries so restore can
+        put them back exactly.
         """
         from PySide6.QtWidgets import QApplication
-        hidden: list = []
+        dimmed: list = []
         for w in QApplication.topLevelWidgets():
             if not w.isVisible():
                 continue
             try:
-                hidden.append((w, w.isMaximized(), bytes(w.saveGeometry())))
-                w.hide()
+                dimmed.append((w, w.windowOpacity()))
+                w.setWindowOpacity(0.0)
             except Exception:
-                log.debug("failed to hide widget for capture", exc_info=True)
-        return hidden
+                log.debug("failed to dim widget for capture", exc_info=True)
+        # Let Qt paint the transparency before mss grabs pixels.
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
+        return dimmed
 
-    def _restore_app_windows(self, hidden_state: list) -> None:
-        for w, was_maximized, geom in hidden_state:
+    def _restore_app_windows(self, dimmed_state: list) -> None:
+        """Restore the original opacity of every widget we dimmed."""
+        for w, original_opacity in dimmed_state:
             try:
-                w.restoreGeometry(geom)
-                if was_maximized:
-                    w.showMaximized()
-                else:
-                    w.show()
-                w.raise_()
+                w.setWindowOpacity(original_opacity)
             except Exception:
-                log.debug("failed to restore widget after capture", exc_info=True)
+                log.debug("failed to restore widget opacity", exc_info=True)
+        # Ensure the calibration dialog ends up on top of Tradovate again,
+        # since we just activated Tradovate for the capture.
+        cal_dialog = self.window()
+        if cal_dialog is not None and cal_dialog.isVisible():
+            try:
+                cal_dialog.raise_()
+                cal_dialog.activateWindow()
+            except Exception:
+                log.debug("failed to raise calibration dialog", exc_info=True)
+        # Belt-and-suspenders: retry the raise once after a short delay in
+        # case Windows suppressed the first one due to foreground-lock.
+        def _raise_again():
+            try:
+                if cal_dialog is not None and cal_dialog.isVisible():
+                    cal_dialog.raise_()
+                    cal_dialog.activateWindow()
+            except Exception:
+                log.debug("second-raise failed", exc_info=True)
+        QTimer.singleShot(150, _raise_again)
 
     def _capture_raw_monitor(self, idx: int):
         """Just the mss capture. No hide/show, no UI updates."""
