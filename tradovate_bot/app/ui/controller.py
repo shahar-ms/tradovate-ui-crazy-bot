@@ -192,12 +192,21 @@ class UiController(QObject):
 
         engine = self._supervisor.deps.engine
         try:
-            ok, msg = engine.submit_manual_intent(action)  # type: ignore[arg-type]
+            ok, msg, intents = engine.submit_manual_intent(action)  # type: ignore[arg-type]
         except Exception as e:
             log.exception("submit_manual_intent raised")
-            ok, msg = False, f"engine error: {e}"
+            ok, msg, intents = False, f"engine error: {e}", []
         if ok:
-            emit_event(self.signals, "info", "controller", f"manual {action}: {msg}")
+            # Forward the emitted intents onto the bus so the executor picks
+            # them up. The engine intentionally doesn't publish; the UI
+            # controller owns the bus.
+            for intent in intents:
+                try:
+                    self._supervisor._publish_intent(intent)
+                except Exception:
+                    log.exception("failed to publish manual intent")
+            emit_event(self.signals, "info", "controller",
+                       f"manual {action}: {msg} ({len(intents)} intent(s))")
         else:
             emit_event(self.signals, "warn", "controller", f"manual {action} rejected: {msg}")
             self.signals.manual_rejected.emit(msg)

@@ -100,7 +100,8 @@ class StrategyEngine:
     # ---- manual intents (HUD-originated) ---- #
 
     def submit_manual_intent(self, action: SignalActionT,
-                             reason: str = "manual_hud") -> tuple[bool, str]:
+                             reason: str = "manual_hud"
+                             ) -> tuple[bool, str, list[SignalIntent]]:
         """
         Route a HUD-originated click through the strategy state machine.
 
@@ -109,47 +110,50 @@ class StrategyEngine:
         combinations (buy while long, sell while short, etc) so we never
         implicitly flip or pyramid a position.
 
-        Returns (accepted, message). On accept, the intent is also emitted
-        through the same pipeline a strategy-generated intent uses, so the
-        Supervisor/Executor handle it identically.
+        Returns (accepted, message, intents). On accept, `intents` is the
+        ordered list of SignalIntent objects the caller must forward to the
+        execution bus — the engine intentionally does NOT publish them
+        itself because the bar-driven path uses the same _build_intent
+        mechanism and we don't want to double-publish. The controller owns
+        the bus.
         """
         with self._transition_lock:
             if self.state.is_halted():
-                return False, "halted"
+                return False, "halted", []
 
             price = self._last_accepted_price
+            out: list[SignalIntent] = []
 
             if action == "CANCEL_ALL":
-                # CANCEL_ALL is always safe to emit — it never enters a position
-                self._build_intent("CANCEL_ALL", reason, price)
-                return True, "emitted"
+                out.append(self._build_intent("CANCEL_ALL", reason, price))
+                return True, "emitted", out
 
             if action in ("BUY", "SELL"):
                 if not self.state.is_flat():
-                    return False, "position active \u2014 use Cancel All first"
+                    return False, "position active \u2014 use Cancel All first", []
                 if not self._price_stream_ok:
-                    return False, "price stream not ok"
+                    return False, "price stream not ok", []
                 decision = self.risk.can_enter(self._now_utc(), self._price_stream_ok)
                 if not decision.can_enter:
-                    return False, decision.reason or "risk blocked"
+                    return False, decision.reason or "risk blocked", []
                 if price is None:
-                    return False, "no price yet"
-                self._initiate_entry(action, trigger_price=price, reason=reason)
-                return True, "emitted"
+                    return False, "no price yet", []
+                out.extend(self._initiate_entry(action, trigger_price=price, reason=reason))
+                return True, "emitted", out
 
             if action == "EXIT_LONG":
                 if not self.state.is_long():
-                    return False, "not in a long position"
-                self._build_exit(reason)
-                return True, "emitted"
+                    return False, "not in a long position", []
+                out.append(self._build_exit(reason))
+                return True, "emitted", out
 
             if action == "EXIT_SHORT":
                 if not self.state.is_short():
-                    return False, "not in a short position"
-                self._build_exit(reason)
-                return True, "emitted"
+                    return False, "not in a short position", []
+                out.append(self._build_exit(reason))
+                return True, "emitted", out
 
-            return False, f"unsupported manual action: {action}"
+            return False, f"unsupported manual action: {action}", []
 
     # ---- tick handling ---- #
 

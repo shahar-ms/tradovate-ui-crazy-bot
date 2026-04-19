@@ -189,6 +189,36 @@ def test_command_quit_sets_stop():
     assert sup._stop.is_set()
 
 
+def test_controller_submit_manual_publishes_intents_to_bus(qtbot=None):
+    """Guards the bug where manual HUD BUY/SELL/CANCEL never reached the
+    executor because the controller's _on_engine_intent callback only
+    emitted a UI signal instead of pushing onto bus.intent_queue."""
+    from app.ui.app_signals import AppSignals
+    from app.ui.controller import UiController
+    from app.ui.ui_state import UiState
+
+    ex = FakeExecutor()
+    engine = StrategyEngine(_strategy_cfg())
+    # seed a price so the engine accepts BUY from FLAT
+    engine._last_accepted_price = 100.0
+
+    sup = _make_supervisor(ex, engine=engine)
+
+    signals = AppSignals()
+    controller = UiController(signals=signals, state=UiState())
+    # wire controller to this supervisor without booting real threads
+    controller._supervisor = sup
+
+    assert sup.bus.intent_queue.qsize() == 0
+    ok, msg = controller.submit_manual("BUY")
+    assert ok, msg
+
+    # Supervisor's intent queue must now contain the emitted intents
+    # (CANCEL_ALL before BUY, since cancel_all_before_new_entry defaults to True).
+    sizes = sup.bus.intent_queue.qsize()
+    assert sizes >= 1
+
+
 def test_pause_sets_flag_and_suspends_engine_stream_ok():
     """Pause flips the flag + tells the engine the stream isn't ok."""
     sup = _make_supervisor(FakeExecutor())
