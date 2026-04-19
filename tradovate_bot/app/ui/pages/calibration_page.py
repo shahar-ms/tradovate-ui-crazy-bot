@@ -311,48 +311,110 @@ class CalibrationPage(QWidget):
             # restore normal disable/enable rules
             self._refresh_image_buttons()
 
+    # ----- helpers to keep our own windows out of the screenshot ----- #
+
+    def _hide_app_windows_for_capture(self) -> list:
+        """
+        Hide every visible top-level Qt widget this app owns so that our own
+        pixels (calibration dialog, HUD, etc.) don't end up in the screen
+        capture. Returns a list of (widget, was_maximized, geometry) rows
+        so _restore_app_windows can put everything back faithfully.
+        """
+        from PySide6.QtWidgets import QApplication
+        hidden: list = []
+        for w in QApplication.topLevelWidgets():
+            if not w.isVisible():
+                continue
+            try:
+                hidden.append((w, w.isMaximized(), bytes(w.saveGeometry())))
+                w.hide()
+            except Exception:
+                log.debug("failed to hide widget for capture", exc_info=True)
+        return hidden
+
+    def _restore_app_windows(self, hidden_state: list) -> None:
+        for w, was_maximized, geom in hidden_state:
+            try:
+                w.restoreGeometry(geom)
+                if was_maximized:
+                    w.showMaximized()
+                else:
+                    w.show()
+                w.raise_()
+            except Exception:
+                log.debug("failed to restore widget after capture", exc_info=True)
+
+    def _capture_raw_monitor(self, idx: int):
+        """Just the mss capture. No hide/show, no UI updates."""
+        with mss.mss() as sct:
+            mon = sct.monitors[idx]
+            raw = np.array(sct.grab(mon))
+            bgr = iu.bgra_to_bgr(raw)
+        return bgr, dict(mon)  # copy monitor dict in case sct closes
+
     def _grab_full_monitor(self) -> None:
+        """Plain 'Capture screen' final step. Briefly hides our windows so they
+        don't appear in the screenshot, captures, then restores."""
         idx = self.monitor_combo.currentData()
         if idx is None:
             QMessageBox.warning(self, "No monitor", "No monitor selected")
             return
-        try:
-            with mss.mss() as sct:
-                mon = sct.monitors[idx]
-                raw = np.array(sct.grab(mon))
-                bgr = iu.bgra_to_bgr(raw)
-        except Exception as e:
-            QMessageBox.critical(self, "Capture failed", str(e))
-            return
-        self._set_image(bgr, source="capture",
-                        monitor_index=idx,
-                        size=(int(mon["width"]), int(mon["height"])))
-        emit_event(self.signals, "info", "calibration",
-                   f"captured monitor {idx}: {self._monitor_size[0]}x{self._monitor_size[1]}")
+
+        hidden = self._hide_app_windows_for_capture()
+        # schedule the actual capture on a QTimer so Qt can finish hiding
+        # + the window compositor catches up before mss grabs pixels.
+        QTimer.singleShot(150, lambda: self._finish_grab(idx, hidden, source="capture",
+                                                         log_tag="monitor"))
 
     def _capture_specific_window(self) -> None:
-        """Pick a window by title, activate it, countdown, then capture full monitor."""
-        dlg = WindowPickerDialog(self)
-        if not dlg.exec():
+        """Pick a window by title. Hide our windows, activate the target, wait
+        for it to repaint, capture the full monitor, then restore our windows.
+        No visible countdown — the operator already chose what to capture."""
+        picker = WindowPickerDialog(self)
+        if not picker.exec():
             return
-        choice = dlg.selected_choice
+        choice = picker.selected_choice
         if choice is None:
             return
 
+        # Hide our windows BEFORE activating the target — otherwise our
+        # always-on-top dialog keeps intercepting focus and covering pixels.
+        hidden = self._hide_app_windows_for_capture()
+
         err = WindowPickerDialog.activate(choice)
         if err is not None:
+            self._restore_app_windows(hidden)
             QMessageBox.warning(
                 self, "Activate failed",
                 f"Could not activate {choice.title!r}:\n{err}\n\n"
-                "Bring it to the front manually during the countdown."
+                "Bring the target window to the front manually and retry."
             )
+            return
 
-        # small 100ms grace so Windows finishes the focus switch before the
-        # countdown begins; then the normal 3-second countdown runs.
-        QTimer.singleShot(100, lambda: self._start_countdown(
-            on_zero=self._grab_full_monitor,
-            label_prefix=f"Capturing ({choice.title[:30]}) in",
+        idx = self.monitor_combo.currentData() or 1
+        # 500ms for focus switch + repaint; longer than the plain-capture path
+        # since the target may have been minimized or behind other windows.
+        QTimer.singleShot(500, lambda: self._finish_grab(
+            idx, hidden, source="capture",
+            log_tag=f"picker '{choice.title[:40]}'",
         ))
+
+    def _finish_grab(self, idx: int, hidden: list, source: str, log_tag: str) -> None:
+        """Common tail of the two capture flows: grab pixels, restore windows,
+        update the canvas. Restore runs in a `finally` so we never leave the
+        operator staring at a blank screen."""
+        try:
+            bgr, mon = self._capture_raw_monitor(idx)
+        except Exception as e:
+            self._restore_app_windows(hidden)
+            QMessageBox.critical(self, "Capture failed", str(e))
+            return
+        # restore first so the canvas update happens with our windows visible
+        self._restore_app_windows(hidden)
+        size = (int(mon["width"]), int(mon["height"]))
+        self._set_image(bgr, source=source, monitor_index=idx, size=size)
+        emit_event(self.signals, "info", "calibration",
+                   f"captured {log_tag}: {size[0]}x{size[1]}")
 
     def _load_from_file(self) -> None:
         start_dir = str(paths.screenshots_dir())

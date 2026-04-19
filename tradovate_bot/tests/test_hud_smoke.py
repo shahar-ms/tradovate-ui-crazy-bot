@@ -244,6 +244,33 @@ def test_toast_appears_on_manual_rejected(qtbot):
     assert "position active" in hud._toast_lbl.text()
 
 
+def test_calibration_hides_and_restores_windows_around_capture(qtbot):
+    """_hide_app_windows_for_capture removes visible top-level widgets;
+    _restore_app_windows puts them back."""
+    from PySide6.QtWidgets import QLabel
+
+    from app.ui.pages.calibration_page import CalibrationPage
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    # stand-in for "some other window of our app" (like the HUD)
+    fake_other = QLabel("fake")
+    qtbot.addWidget(fake_other)
+    fake_other.show()
+    assert not fake_other.isHidden()
+
+    hidden = page._hide_app_windows_for_capture()
+    # at least one widget (fake_other) should have been hidden
+    hidden_widgets = [row[0] for row in hidden]
+    assert fake_other in hidden_widgets
+    assert fake_other.isHidden()
+
+    page._restore_app_windows(hidden)
+    assert not fake_other.isHidden()
+
+
 def test_calibration_dialog_has_maximize_toggle(qtbot):
     """The calibration dialog must support maximize for pixel-precise work."""
     from app.ui.dialogs.calibration_dialog import CalibrationDialog
