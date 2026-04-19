@@ -102,13 +102,11 @@ def test_to_execution_intent_mapping():
     assert sup._to_execution_intent(SignalIntent(action="CANCEL_ALL", reason="x")).action == "CANCEL_ALL"
 
 
-def test_arm_requires_paper_or_armed_mode():
+def test_arm_works_from_price_debug():
+    """The simplified HUD boots in PRICE_DEBUG and arms directly — there is
+    no intermediate PAPER step anymore."""
     sup = _make_supervisor(FakeExecutor())
     sup.state.mode = "PRICE_DEBUG"
-    sup._try_arm()
-    assert not sup.state.armed  # cannot arm from PRICE_DEBUG
-
-    sup.state.mode = "PAPER"
     sup._try_arm()
     assert sup.state.armed
     assert sup.state.mode == "ARMED"
@@ -116,8 +114,16 @@ def test_arm_requires_paper_or_armed_mode():
 
 def test_arm_blocked_when_halted():
     sup = _make_supervisor(FakeExecutor())
-    sup.state.mode = "PAPER"
+    sup.state.mode = "PRICE_DEBUG"
     sup._halt("x")
+    sup._try_arm()
+    assert not sup.state.armed
+
+
+def test_arm_blocked_when_paused():
+    sup = _make_supervisor(FakeExecutor())
+    sup.state.mode = "PRICE_DEBUG"
+    sup._pause("anchor_drift")
     sup._try_arm()
     assert not sup.state.armed
 

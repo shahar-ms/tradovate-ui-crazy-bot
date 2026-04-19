@@ -265,8 +265,8 @@ class UiController(QObject):
                                   f"price_stream_health={self.state.price_stream_health}"))
         checks.append(PreArmCheck("anchor_guard_ok", self.state.anchor_ok,
                                   "anchor guard not ok"))
-        checks.append(PreArmCheck("in_paper_mode", self.state.mode == "PAPER",
-                                  f"must be in PAPER mode first (current={self.state.mode})"))
+        checks.append(PreArmCheck("not_paused", not self.state.paused,
+                                  f"paused ({self.state.pause_reason or '?'})"))
         return checks
 
     # ---------------- engine -> signal bridge ---------------- #

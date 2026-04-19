@@ -165,8 +165,8 @@ class Supervisor:
         if self.state.halted:
             log.warning("cannot arm while halted (%s)", self.state.halt_reason)
             return
-        if self.state.mode in ("CALIBRATION", "PRICE_DEBUG"):
-            log.warning("cannot arm from %s; go to PAPER first", self.state.mode)
+        if self.state.paused:
+            log.warning("cannot arm while paused (%s)", self.state.pause_reason)
             return
         self.state.armed = True
         self.state.mode = "ARMED"
