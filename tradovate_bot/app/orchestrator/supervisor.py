@@ -51,13 +51,21 @@ class SupervisorDeps:
 class Supervisor:
     STATUS_PRINT_SECONDS = 5.0
 
+    # How often the watchdog loop re-checks pause/halt conditions. Smaller
+    # than the anchor probe so state transitions feel responsive.
+    WATCHDOG_TICK_SECONDS = 0.5
+    # How often to probe the live anchor similarity. User-configurable.
+    ANCHOR_PROBE_SECONDS = 3.0
+
     def __init__(self, deps: SupervisorDeps, state: RuntimeState,
                  bus: Optional[EventBus] = None,
-                 watchdog_cfg: Optional[WatchdogConfig] = None):
+                 watchdog_cfg: Optional[WatchdogConfig] = None,
+                 anchor_probe_seconds: float = ANCHOR_PROBE_SECONDS):
         self.deps = deps
         self.state = state
         self.bus = bus or EventBus.create()
         self.watchdog_cfg = watchdog_cfg or WatchdogConfig()
+        self.anchor_probe_seconds = anchor_probe_seconds
 
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -67,6 +75,9 @@ class Supervisor:
 
         # persistence
         self._state_path = paths.state_dir() / f"runtime_state_{session_id()}.json"
+
+        # anchor probe bookkeeping
+        self._last_anchor_probe_ts: float = 0.0
 
     # ------------------- lifecycle ------------------- #
 
@@ -332,22 +343,95 @@ class Supervisor:
 
     def _watchdog_loop(self) -> None:
         while not self._stop.is_set():
-            time.sleep(0.5)
+            time.sleep(self.WATCHDOG_TICK_SECONDS)
             if self.state.halted:
                 continue
-            ms_since = now_ms() - (self.state.last_price_tick_ts_ms or now_ms())
-            reason = first_halt_reason([
-                price_watchdog(self._component_health.price_stream_health, ms_since, self.watchdog_cfg),
-                anchor_watchdog(self.state.anchor_guard_ok),
-                execution_watchdog(self._component_health.consecutive_unknown_acks, self.watchdog_cfg),
+
+            # Refresh the anchor similarity check on a fixed cadence so the
+            # pause state reflects whether Tradovate is actually visible.
+            self._maybe_probe_anchor()
+
+            # Halt-class reasons: unrecoverable or demand operator attention.
+            # These keep the existing HALT behavior.
+            halt_reason = first_halt_reason([
+                execution_watchdog(self._component_health.consecutive_unknown_acks,
+                                   self.watchdog_cfg),
                 queue_watchdog({
                     "price": self.bus.price_queue.qsize(),
                     "intent": self.bus.intent_queue.qsize(),
                     "ack": self.bus.ack_queue.qsize(),
                 }, self.watchdog_cfg),
             ])
-            if reason:
-                self._halt(reason)
+            if halt_reason:
+                self._halt(halt_reason)
+                continue
+
+            # Pause-class reasons: transient, auto-recoverable. Price stream
+            # broken or stale, or anchor guard failing. Trading suspends while
+            # paused; resumes as soon as the conditions clear.
+            ms_since = now_ms() - (self.state.last_price_tick_ts_ms or now_ms())
+            pause_reason = first_halt_reason([
+                price_watchdog(self._component_health.price_stream_health, ms_since,
+                               self.watchdog_cfg),
+                anchor_watchdog(self.state.anchor_guard_ok),
+            ])
+
+            if pause_reason:
+                self._pause(pause_reason)
+            else:
+                self._resume_if_paused()
+
+    def _maybe_probe_anchor(self) -> None:
+        """Run the live anchor-similarity check every `anchor_probe_seconds`."""
+        now_s = time.time()
+        if now_s - self._last_anchor_probe_ts < self.anchor_probe_seconds:
+            return
+        self._last_anchor_probe_ts = now_s
+        try:
+            guard = self.deps.executor.guard
+            result = guard.check()
+            self.state.anchor_guard_ok = result.ok
+            if not result.ok:
+                log.info("anchor probe: %s", result.as_message())
+        except Exception as e:
+            log.warning("anchor probe failed: %s", e)
+            self.state.anchor_guard_ok = False
+
+    # ------------------- pause / resume ------------------- #
+
+    def _pause(self, reason: str) -> None:
+        """Transient suspension. Keeps the supervisor running; trading is off."""
+        if self.state.halted:
+            return
+        if not self.state.paused or self.state.pause_reason != reason:
+            log.warning("PAUSED: %s", reason)
+        self.state.paused = True
+        self.state.pause_reason = reason
+        # Suspending ARMED mode while paused: engine's price_stream_ok flag is
+        # already driven off health in the strategy loop, so entries won't fire.
+        # submit_manual_intent also refuses when paused (see engine).
+        try:
+            self.deps.engine.set_price_stream_ok(False)
+        except Exception:
+            pass
+
+    def _resume_if_paused(self) -> None:
+        if not self.state.paused:
+            return
+        log.info("RESUMED from pause (was: %s)", self.state.pause_reason)
+        self.state.paused = False
+        self.state.pause_reason = None
+        # Engine will pick up fresh health in the strategy loop; still set
+        # ok=True explicitly so a pending bar close can trigger on the next
+        # tick instead of waiting for the next health update.
+        try:
+            health = self._price_stream.get_health() if self._price_stream else None
+            if health is not None:
+                self.deps.engine.set_price_stream_ok(health.health_state == "ok")
+            else:
+                self.deps.engine.set_price_stream_ok(True)
+        except Exception:
+            pass
 
     # ------------------- helpers ------------------- #
 

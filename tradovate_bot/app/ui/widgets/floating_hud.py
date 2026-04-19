@@ -189,7 +189,17 @@ class FloatingHud(QWidget):
         self._ack_lbl.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED};")
         root.addWidget(self._ack_lbl)
 
-        # halt banner
+        # paused banner (yellow — transient, auto-recovers)
+        self._paused_lbl = QLabel("")
+        self._paused_lbl.setStyleSheet(
+            f"background-color: {DEGRADED_YELLOW}; color: #101010; font-weight: 700; "
+            "padding: 4px 8px; border-radius: 3px; font-size: 10px;"
+        )
+        self._paused_lbl.setWordWrap(True)
+        self._paused_lbl.setVisible(False)
+        root.addWidget(self._paused_lbl)
+
+        # halt banner (red — unrecoverable, operator must act)
         self._halt_lbl = QLabel("")
         self._halt_lbl.setStyleSheet(
             f"background-color: {BROKEN_RED}; color: white; font-weight: 700; "
@@ -383,7 +393,14 @@ class FloatingHud(QWidget):
             ack_parts.append(f"fill={s.fill_price:.2f}")
         self._ack_lbl.setText("  ".join(ack_parts))
 
-        # halt banner
+        # paused banner (yellow, distinct from red halt)
+        if s.paused and not s.halted:
+            self._paused_lbl.setText(f"PAUSED — {s.pause_reason or 'screen not visible'}")
+            self._paused_lbl.setVisible(True)
+        else:
+            self._paused_lbl.setVisible(False)
+
+        # halt banner (red)
         if s.halted:
             self._halt_lbl.setText(f"HALTED — {s.halt_reason or '?'}")
             self._halt_lbl.setVisible(True)
@@ -393,14 +410,19 @@ class FloatingHud(QWidget):
         # button enablement
         running = bool(self.controller and self.controller.is_running())
         flat = s.position_side == "flat"
-        pending = s.mode in ("PENDING_ENTRY", "PENDING_EXIT")  # no direct flag; rely on side+ack
         halted = s.halted
+        paused = s.paused
         armed = s.armed
 
-        self._buy_btn.setEnabled(running and flat and not halted)
-        self._sell_btn.setEnabled(running and flat and not halted)
-        self._cancel_btn.setEnabled(running)
-        self._arm_btn.setEnabled(running and not armed and not halted and s.calibration_loaded)
+        # Entry buttons: require running + flat + not halted + not paused
+        self._buy_btn.setEnabled(running and flat and not halted and not paused)
+        self._sell_btn.setEnabled(running and flat and not halted and not paused)
+        # CANCEL ALL still works while paused (it's a safety action)
+        self._cancel_btn.setEnabled(running and not halted)
+        # ARM requires calibration + not paused + not halted + not already armed
+        self._arm_btn.setEnabled(
+            running and not armed and not halted and not paused and s.calibration_loaded
+        )
         self._disarm_btn.setEnabled(running and armed)
         self._halt_btn.setEnabled(running)
         self._setup_btn.setEnabled(True)
@@ -409,6 +431,8 @@ class FloatingHud(QWidget):
     def _mode_color(s: UiState) -> str:
         if s.halted or s.mode == "HALTED":
             return BROKEN_RED
+        if s.paused:
+            return DEGRADED_YELLOW
         if s.armed or s.mode == "ARMED":
             return DEGRADED_YELLOW
         if s.mode in ("PAPER", "PRICE_DEBUG"):

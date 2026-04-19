@@ -19,6 +19,11 @@ class UiState:
     armed: bool = False
     halted: bool = False
     halt_reason: Optional[str] = None
+    # Transient pause: Tradovate not visible / OCR not reading / anchor drift.
+    # Auto-resumes when conditions clear. Distinct from halted (which needs
+    # operator action).
+    paused: bool = False
+    pause_reason: Optional[str] = None
     uptime_seconds: int = 0
 
     # market

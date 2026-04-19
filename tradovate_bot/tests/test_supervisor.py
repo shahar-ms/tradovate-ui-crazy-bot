@@ -189,6 +189,42 @@ def test_command_quit_sets_stop():
     assert sup._stop.is_set()
 
 
+def test_pause_sets_flag_and_suspends_engine_stream_ok():
+    """Pause flips the flag + tells the engine the stream isn't ok."""
+    sup = _make_supervisor(FakeExecutor())
+    assert not sup.state.paused
+    sup._pause("anchor_drift")
+    assert sup.state.paused
+    assert sup.state.pause_reason == "anchor_drift"
+    # Engine price_stream_ok flag should have been flipped off
+    assert sup.deps.engine._price_stream_ok is False
+
+
+def test_resume_if_paused_clears_state():
+    sup = _make_supervisor(FakeExecutor())
+    sup._pause("anchor_drift")
+    assert sup.state.paused
+    sup._resume_if_paused()
+    assert not sup.state.paused
+    assert sup.state.pause_reason is None
+
+
+def test_resume_if_paused_is_noop_when_not_paused():
+    sup = _make_supervisor(FakeExecutor())
+    # no prior pause — should be a cheap no-op, not raise
+    sup._resume_if_paused()
+    assert not sup.state.paused
+
+
+def test_halt_does_not_clear_pause_flag_silently():
+    """If the supervisor later halts while paused, halted takes priority."""
+    sup = _make_supervisor(FakeExecutor())
+    sup._pause("anchor_drift")
+    sup._halt("execution_ack_unknown")
+    assert sup.state.halted
+    # pause flag may remain (it's transient), but halted must dominate in the UI
+
+
 def test_disarm_sets_dry_run():
     sup = _make_supervisor(FakeExecutor())
     sup.state.mode = "PAPER"

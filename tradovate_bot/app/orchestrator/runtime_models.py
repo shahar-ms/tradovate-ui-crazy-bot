@@ -22,6 +22,11 @@ class RuntimeState(BaseModel):
     armed: bool = False
     halted: bool = False
     halt_reason: Optional[str] = None
+    # Transient pause (auto-recovers): set when the Tradovate screen isn't visible,
+    # price OCR is broken, or anchor drifts. Trading is suspended but the bot keeps
+    # polling and resumes automatically when conditions clear.
+    paused: bool = False
+    pause_reason: Optional[str] = None
 
     last_price_tick_ts_ms: int = 0
     last_execution_ack_ts_ms: int = 0

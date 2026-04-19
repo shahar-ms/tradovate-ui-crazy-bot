@@ -195,6 +195,46 @@ def test_cancel_and_disarm_and_halt_route_correctly(qtbot, monkeypatch):
     assert ctrl.halt_calls == ["operator_halt"]
 
 
+def test_hud_shows_paused_banner_and_disables_entry_buttons(qtbot):
+    hud, ctrl, state = _build_hud(qtbot)
+    ctrl.is_running_val = True
+    state.mode = "PAPER"
+    state.calibration_loaded = True
+    state.armed = False
+    state.halted = False
+    state.paused = True
+    state.pause_reason = "anchor_drift"
+    state.position_side = "flat"
+    hud._refresh_all()
+
+    # paused banner visible, halt banner hidden
+    assert not hud._paused_lbl.isHidden()
+    assert "anchor_drift" in hud._paused_lbl.text()
+    assert hud._halt_lbl.isHidden()
+
+    # entry buttons disabled while paused
+    assert not hud._buy_btn.isEnabled()
+    assert not hud._sell_btn.isEnabled()
+    assert not hud._arm_btn.isEnabled()
+    # CANCEL ALL and HALT still available even when paused
+    assert hud._cancel_btn.isEnabled()
+    assert hud._halt_btn.isEnabled()
+
+
+def test_hud_paused_banner_hidden_when_halted_dominates(qtbot):
+    hud, ctrl, state = _build_hud(qtbot)
+    ctrl.is_running_val = True
+    state.mode = "HALTED"
+    state.halted = True
+    state.halt_reason = "execution_ack_unknown"
+    state.paused = True
+    state.pause_reason = "anchor_drift"
+    hud._refresh_all()
+    # halted takes visual priority — paused banner hides
+    assert hud._paused_lbl.isHidden()
+    assert not hud._halt_lbl.isHidden()
+
+
 def test_toast_appears_on_manual_rejected(qtbot):
     hud, _, _ = _build_hud(qtbot)
     hud._show_toast("position active — use Cancel All first")

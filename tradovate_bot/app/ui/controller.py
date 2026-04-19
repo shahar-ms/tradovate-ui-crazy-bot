@@ -178,6 +178,18 @@ class UiController(QObject):
             msg = "bot not running"
             self.signals.manual_rejected.emit(msg)
             return False, msg
+
+        # Surface pause as a distinct, clearer rejection message (the engine
+        # itself would just say "price stream not ok" because we suspend it
+        # during pause).
+        sup_state = self._supervisor.state
+        if sup_state.paused and action in ("BUY", "SELL"):
+            msg = f"paused — {sup_state.pause_reason or 'screen not visible'}"
+            emit_event(self.signals, "warn", "controller",
+                       f"manual {action} rejected while paused: {msg}")
+            self.signals.manual_rejected.emit(msg)
+            return False, msg
+
         engine = self._supervisor.deps.engine
         try:
             ok, msg = engine.submit_manual_intent(action)  # type: ignore[arg-type]
@@ -266,6 +278,13 @@ class UiController(QObject):
             self.state.halted = False
             self.state.halt_reason = None
             self.signals.halt_cleared.emit()
+
+        # pause (transient, auto-recovers)
+        self.state.paused = rs.paused
+        self.state.pause_reason = rs.pause_reason
+
+        # anchor guard result (updated by supervisor's anchor probe)
+        self.state.anchor_ok = rs.anchor_guard_ok
 
         # market
         if rs.last_price is not None and rs.last_price != self.state.last_price:

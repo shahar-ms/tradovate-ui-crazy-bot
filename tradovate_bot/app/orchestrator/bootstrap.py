@@ -43,9 +43,25 @@ def bootstrap(
     initial_mode: RuntimeMode = "PRICE_DEBUG",
     armed: bool = False,
     skip_calibration_check: bool = False,
+    soft_start: bool = True,
 ) -> BootstrapResult:
+    """
+    Build everything and return a BootstrapResult ready for the Supervisor.
+
+    `soft_start=True` (default): only the offline calibration checks are
+    fatal at startup (files exist, regions within bounds, anchor reference
+    image readable). The live anchor-similarity check is logged as
+    informational — if the Tradovate window isn't visible right now, the
+    app still boots and the runtime watchdog will PAUSE trading until
+    things recover. This matches the operator flow of "launch the app,
+    then bring Tradovate forward".
+
+    Pass `soft_start=False` to require the live anchor check to pass at
+    startup (old behavior).
+    """
     setup_logging()
-    log.info("--- bootstrap start (mode=%s, armed=%s) ---", initial_mode, armed)
+    log.info("--- bootstrap start (mode=%s, armed=%s, soft_start=%s) ---",
+             initial_mode, armed, soft_start)
 
     # load configs
     try:
@@ -56,18 +72,40 @@ def bootstrap(
 
     # calibration
     if not skip_calibration_check:
-        report = validate_calibration(offline=False)
-        for line in report.lines:
+        # always enforce offline checks (file existence, bounds, anchor image)
+        offline_report = validate_calibration(offline=True)
+        for line in offline_report.lines:
             log.info(line)
-        if not report.ready:
-            # surface the specific failure lines so the UI can show them
-            fail_lines = [l for l in report.lines if l.startswith("[FAIL]")]
+        if not offline_report.ready:
+            fail_lines = [l for l in offline_report.lines if l.startswith("[FAIL]")]
             summary = fail_lines[0] if fail_lines else "calibration_invalid"
             raise BootstrapError(
-                summary.replace("[FAIL]", "").strip()
-                or "calibration_invalid",
-                report_lines=list(report.lines),
+                summary.replace("[FAIL]", "").strip() or "calibration_invalid",
+                report_lines=list(offline_report.lines),
             )
+
+        if not soft_start:
+            # strict mode: also require the live anchor similarity check
+            live_report = validate_calibration(offline=False)
+            for line in live_report.lines:
+                log.info(line)
+            if not live_report.ready:
+                fail_lines = [l for l in live_report.lines if l.startswith("[FAIL]")]
+                summary = fail_lines[0] if fail_lines else "calibration_invalid"
+                raise BootstrapError(
+                    summary.replace("[FAIL]", "").strip() or "calibration_invalid",
+                    report_lines=list(live_report.lines),
+                )
+        else:
+            # informational — log but don't fail boot. Watchdogs will PAUSE trading
+            # until the live check passes at runtime.
+            live_report = validate_calibration(offline=False)
+            for line in live_report.lines:
+                log.info("live-check: %s", line)
+            if not live_report.ready:
+                log.warning("soft_start: live calibration check did not pass — "
+                            "the bot will boot and PAUSE trading until conditions "
+                            "recover. Bring Tradovate to the front to resume.")
     try:
         screen_map = load_screen_map(paths.screen_map_path())
     except Exception as e:
