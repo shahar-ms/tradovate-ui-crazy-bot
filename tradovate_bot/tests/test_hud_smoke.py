@@ -365,6 +365,30 @@ def test_hud_compact_view_shows_on_off(qtbot):
     assert hud._compact_mode.text() == "OFF"
 
 
+def test_hud_default_position_anchors_top_at_65pct(qtbot, tmp_path, monkeypatch):
+    """place_default() should anchor the HUD's TOP edge at ~65% of the
+    screen height, so the body sits in the lower-third of the screen."""
+    from PySide6.QtGui import QGuiApplication
+    from app.utils import paths
+    from app.ui.widgets.floating_hud import HUD_HEIGHT, HUD_VERTICAL_PCT
+
+    # no saved position → place_default takes the fresh path
+    monkeypatch.setattr(paths, "state_dir", lambda: tmp_path)
+
+    hud, _, _ = _build_hud(qtbot)
+    hud.place_default()
+
+    screen = QGuiApplication.primaryScreen()
+    geom = screen.availableGeometry()
+    expected_top = geom.top() + int(geom.height() * HUD_VERTICAL_PCT)
+    # clamp ceiling: geom.bottom() - HUD_HEIGHT - 10
+    expected_top = max(geom.top() + 10,
+                       min(expected_top, geom.bottom() - HUD_HEIGHT - 10))
+    assert hud.y() == expected_top
+    # HUD_VERTICAL_PCT is expected to be 0.65 per current design
+    assert HUD_VERTICAL_PCT == 0.65
+
+
 def test_hud_starts_expanded(qtbot):
     hud, _, _ = _build_hud(qtbot)
     assert hud._minimized is False

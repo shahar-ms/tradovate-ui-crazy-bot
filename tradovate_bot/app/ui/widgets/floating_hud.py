@@ -50,7 +50,11 @@ HUD_HEIGHT = 440
 HUD_COMPACT_WIDTH = 210
 HUD_COMPACT_HEIGHT = 38
 HUD_LEFT_MARGIN = 20
-HUD_VERTICAL_PCT = 0.55   # center-ish of the left edge
+# Fraction of the available screen height at which the HUD's TOP edge
+# is anchored by default. The HUD extends downward from there. 0.65 puts
+# the HUD body in the lower-third of the screen, well out of the usual
+# Tradovate chart area.
+HUD_VERTICAL_PCT = 0.65
 
 POSITION_FILE = "hud_pos.json"
 
@@ -399,7 +403,9 @@ class FloatingHud(QWidget):
             return
         geom = screen.availableGeometry()
         x = geom.left() + HUD_LEFT_MARGIN
-        y = geom.top() + int(geom.height() * HUD_VERTICAL_PCT) - HUD_HEIGHT // 2
+        # Anchor the HUD's TOP edge at HUD_VERTICAL_PCT of the screen (so the
+        # whole HUD body sits BELOW that line, not centered on it).
+        y = geom.top() + int(geom.height() * HUD_VERTICAL_PCT)
         y = max(geom.top() + 10, min(y, geom.bottom() - HUD_HEIGHT - 10))
         self.move(x, y)
 
