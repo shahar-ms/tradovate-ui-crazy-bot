@@ -187,6 +187,15 @@ class GettingStartedPage(QWidget):
             action_label="Start Price Debug",
             on_action=self._start_price_debug,
         )
+        # secondary button for live OCR diagnostics
+        self.btn_diagnose = QPushButton("Diagnose OCR  (live preview)")
+        self.btn_diagnose.setToolTip(
+            "Open a live preview of the calibrated price region plus the "
+            "current raw OCR text. Use this when ticks aren't flowing."
+        )
+        self.btn_diagnose.setMinimumHeight(30)
+        self.btn_diagnose.clicked.connect(self._open_diagnose)
+        self.step2.layout().addWidget(self.btn_diagnose)
         root.addWidget(self.step2)
 
         # step 3
@@ -290,24 +299,60 @@ class GettingStartedPage(QWidget):
             )
         if s.mode in ("PRICE_DEBUG", "PAPER", "ARMED"):
             accepted = s.accepted_tick_count
+            rejected = s.rejected_tick_count
             health = s.price_stream_health
             if accepted >= MIN_TICKS_TO_PASS and health == "ok":
                 return StepStatus(
                     state="done",
                     headline="price flowing ✓",
-                    detail=f"{accepted} accepted ticks, health={health}. "
+                    detail=f"{accepted} accepted, {rejected} rejected. "
+                           f"health={health}. "
                            f"Last price: {s.last_price if s.last_price is not None else '—'}",
                 )
+
+            # Build an actionable detail line
+            parts = [f"accepted={accepted}, rejected={rejected}, health={health}"]
+            if s.last_raw_text:
+                parts.append(f"last OCR text: {s.last_raw_text!r}  (conf={s.last_confidence:.0f})")
+            if s.last_reject_reason:
+                parts.append(f"last reject: {s.last_reject_reason}")
+
+            # Common-cause hints based on the reject reason
+            reason = (s.last_reject_reason or "").split(":")[0]
+            hint_by_reason = {
+                "parse_failed":        "OCR is reading garbage. Tradovate probably isn't visible "
+                                       "at the calibrated price region — another window may be on "
+                                       "top, or the region is mis-aligned. Check the preview.",
+                "malformed_number":    "OCR read something but not a clean number. Re-check the "
+                                       "price region — it may be including stray characters.",
+                "unexpected_chars":    "OCR text has non-digit characters. The price region may "
+                                       "be capturing icons/labels along with the number.",
+                "low_confidence":      "OCR confidence is below the threshold. The text may be "
+                                       "too small/blurry, or the background is noisy. Try a tighter "
+                                       "crop around just the price digits.",
+                "not_tick_aligned":    "OCR is reading a number but it isn't a 0.25 tick. Likely "
+                                       "a digit misread (e.g. 7 vs 1). Recalibrate the region, "
+                                       "or disable tick alignment if you're not on MNQ.",
+                "implausible_range":   "OCR is returning values outside the plausible price range. "
+                                       "Check the region.",
+                "jump_too_large":      "OCR value jumped too far from the previous accepted price. "
+                                       "If the real price moved fast, relax max_jump_points.",
+                "candidates_disagree": "Different preprocess recipes disagree on the price. "
+                                       "The region may be partially occluded — check the preview.",
+            }
+            hint = hint_by_reason.get(reason)
+            if hint:
+                parts.append("→ " + hint)
+            else:
+                parts.append(
+                    "Make sure Tradovate is visible under the calibrated price region. "
+                    "Click 'Diagnose OCR' for a live preview + raw text."
+                )
+
             return StepStatus(
                 state="active",
-                headline=f"{accepted}/{MIN_TICKS_TO_PASS} accepted ticks  (health={health})",
-                detail=(
-                    "Tradovate must be visible under the calibrated regions. "
-                    "If ticks aren't accumulating, check that the price region shows "
-                    "clean price digits and that OCR confidence is high on the Dashboard."
-                    if accepted < MIN_TICKS_TO_PASS else
-                    f"Stream health is {health} — if it stays degraded, re-calibrate."
-                ),
+                headline=f"{accepted}/{MIN_TICKS_TO_PASS} accepted  ({rejected} rejected, health={health})",
+                detail="  ·  ".join(parts),
             )
         # HALTED or CALIBRATION
         return StepStatus(
@@ -366,6 +411,11 @@ class GettingStartedPage(QWidget):
         err = self.controller.start(mode="PRICE_DEBUG", armed=False)
         if err:
             QMessageBox.critical(self, "Start failed", err)
+
+    def _open_diagnose(self) -> None:
+        from app.ui.dialogs.ocr_diagnose_dialog import OcrDiagnoseDialog
+        dlg = OcrDiagnoseDialog(self.state, self)
+        dlg.exec()
 
     def _start_paper_mode(self) -> None:
         s2 = self._step2_status()

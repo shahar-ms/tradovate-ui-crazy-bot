@@ -81,6 +81,12 @@ class PriceStream:
         self._last_debug_save_ts = 0
         self._lock = threading.Lock()
 
+        # cumulative counters + diagnostic fields (read by UI layer)
+        self.total_accepted_count: int = 0
+        self.total_rejected_count: int = 0
+        self.last_raw_text: str = ""
+        self.last_reject_reason: Optional[str] = None
+
     # --- thread control --- #
 
     def start(self) -> None:
@@ -151,6 +157,9 @@ class PriceStream:
 
         if result.accepted and result.price is not None:
             self.health.on_success(result.price)
+            self.total_accepted_count += 1
+            self.last_raw_text = result.raw_text or ""
+            self.last_reject_reason = None
             tick = PriceTick(
                 ts_ms=now_ms(),
                 frame_id=fid,
@@ -165,6 +174,9 @@ class PriceStream:
         else:
             reason = self._best_reason(result.reason, failed_reasons)
             self.health.on_rejection(reason)
+            self.total_rejected_count += 1
+            self.last_raw_text = best_failed_raw
+            self.last_reject_reason = reason
             tick = PriceTick(
                 ts_ms=now_ms(),
                 frame_id=fid,

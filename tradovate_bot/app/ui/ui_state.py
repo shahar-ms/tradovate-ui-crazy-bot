@@ -29,6 +29,7 @@ class UiState:
     accepted_tick_count: int = 0
     rejected_tick_count: int = 0
     last_reject_reason: Optional[str] = None
+    last_raw_text: str = ""
 
     # strategy
     position_side: str = "flat"

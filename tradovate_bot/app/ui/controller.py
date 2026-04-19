@@ -50,6 +50,7 @@ class UiController(QObject):
 
         self._supervisor: Optional[Supervisor] = None
         self._started_at_ms: Optional[int] = None
+        self._last_emitted_frame_id: int = -1
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(self.cfg.poll_interval_ms)
@@ -228,23 +229,29 @@ class UiController(QObject):
             self.state.last_price = rs.last_price
             self.state.last_price_ts_ms = rs.last_price_tick_ts_ms
         self.state.price_stream_health = rs.price_stream_health
+
+        # read cumulative counters directly from the stream so we don't
+        # double-count the same tick across poll cycles
+        if sup._price_stream is not None:
+            self.state.accepted_tick_count = sup._price_stream.total_accepted_count
+            self.state.rejected_tick_count = sup._price_stream.total_rejected_count
+            self.state.last_raw_text = sup._price_stream.last_raw_text
+            self.state.last_reject_reason = sup._price_stream.last_reject_reason
+
         latest = sup._price_stream.get_latest_tick() if sup._price_stream else None
         if latest is not None:
             self.state.last_confidence = latest.confidence
-            if latest.accepted:
-                self.state.accepted_tick_count += 1
-            else:
-                self.state.rejected_tick_count += 1
-                self.state.last_reject_reason = latest.reject_reason
-            # push a compact price tick snapshot
-            self.signals.price_updated.emit({
-                "ts_ms": latest.ts_ms,
-                "price": latest.price,
-                "confidence": latest.confidence,
-                "accepted": latest.accepted,
-                "reject_reason": latest.reject_reason,
-                "frame_id": latest.frame_id,
-            })
+            # emit only on new frame ids to avoid UI spam
+            if self._last_emitted_frame_id != latest.frame_id:
+                self._last_emitted_frame_id = latest.frame_id
+                self.signals.price_updated.emit({
+                    "ts_ms": latest.ts_ms,
+                    "price": latest.price,
+                    "confidence": latest.confidence,
+                    "accepted": latest.accepted,
+                    "reject_reason": latest.reject_reason,
+                    "frame_id": latest.frame_id,
+                })
 
         # position
         pos = sup.deps.engine.state.position
