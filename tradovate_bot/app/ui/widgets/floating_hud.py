@@ -165,6 +165,23 @@ class FloatingHud(QWidget):
         # separator
         root.addWidget(self._sep())
 
+        # bot-state row: ENABLED / DISABLED + single toggle button.
+        #   ENABLED  = armed (live clicks) + strategy auto-trades
+        #   DISABLED = manual buttons + OCR only; strategy silent
+        bot_row = QHBoxLayout()
+        bot_row.setSpacing(6)
+        self._bot_state_lbl = QLabel("BOT: —")
+        self._bot_state_lbl.setStyleSheet("font-weight: 700; font-size: 13px;")
+        bot_row.addWidget(self._bot_state_lbl)
+        bot_row.addStretch(1)
+        self._bot_toggle_btn = self._make_button("Enable Bot", role="arm", small=True)
+        self._bot_toggle_btn.setMinimumHeight(30)
+        bot_row.addWidget(self._bot_toggle_btn)
+        root.addLayout(bot_row)
+
+        # separator
+        root.addWidget(self._sep())
+
         # row 4 / 5: position + PnL
         self._pos_lbl = QLabel("pos: flat")
         self._pos_lbl.setStyleSheet("font-size: 12px; font-weight: 600;")
@@ -361,6 +378,7 @@ class FloatingHud(QWidget):
         self._disarm_btn.clicked.connect(self._on_disarm)
         self._halt_btn.clicked.connect(self._on_halt)
         self._setup_btn.clicked.connect(self.setup_requested.emit)
+        self._bot_toggle_btn.clicked.connect(self._on_bot_toggle)
 
         # signals from the bus
         self.signals.price_updated.connect(lambda _t: self._refresh_all())
@@ -527,26 +545,69 @@ class FloatingHud(QWidget):
         self._halt_btn.setEnabled(running)
         self._setup_btn.setEnabled(True)
 
+        # --- BOT state row (Enabled = auto strategy live; Disabled = manual only) --- #
+        if halted:
+            bot_text, bot_color, btn_text, btn_role = (
+                "BOT: HALTED", BROKEN_RED, "Halted", "danger",
+            )
+        elif paused:
+            bot_text, bot_color, btn_text, btn_role = (
+                "BOT: PAUSED", DEGRADED_YELLOW, "Disable Bot" if s.auto_enabled else "Enable Bot",
+                "danger" if s.auto_enabled else "arm",
+            )
+        elif s.auto_enabled and armed:
+            bot_text, bot_color, btn_text, btn_role = (
+                "BOT: ENABLED", OK_GREEN, "Disable Bot", "danger",
+            )
+        elif s.auto_enabled and not armed:
+            bot_text, bot_color, btn_text, btn_role = (
+                "BOT: READY (not armed)", DEGRADED_YELLOW, "Enable Bot", "arm",
+            )
+        else:  # auto disabled
+            bot_text, bot_color, btn_text, btn_role = (
+                "BOT: DISABLED", INACTIVE_GRAY, "Enable Bot", "arm",
+            )
+        self._bot_state_lbl.setText(bot_text)
+        self._bot_state_lbl.setStyleSheet(
+            f"font-weight: 700; font-size: 13px; color: {bot_color};"
+        )
+        self._bot_toggle_btn.setText(btn_text)
+        self._bot_toggle_btn.setProperty("role", btn_role)
+        # re-polish so the role style change takes effect
+        self._bot_toggle_btn.style().unpolish(self._bot_toggle_btn)
+        self._bot_toggle_btn.style().polish(self._bot_toggle_btn)
+        self._bot_toggle_btn.setEnabled(running and not halted)
+
         # --- keep the compact view in sync too --- #
         self._refresh_compact(s)
 
     def _refresh_compact(self, s: UiState) -> None:
         """Keep the minimized block's labels up to date."""
-        # color dot: red if halted, yellow if paused/armed, green if running ok
+        # color dot: red if halted, yellow if paused, green if enabled+armed,
+        # gray if disabled
         if s.halted:
             dot_color = BROKEN_RED
         elif s.paused:
             dot_color = DEGRADED_YELLOW
-        elif s.armed:
-            dot_color = DEGRADED_YELLOW
-        elif s.mode in ("PAPER", "PRICE_DEBUG"):
-            dot_color = OK_GREEN
+        elif s.auto_enabled and s.armed:
+            dot_color = OK_GREEN           # ENABLED — full auto live
+        elif s.auto_enabled:
+            dot_color = DEGRADED_YELLOW    # strategy on but clicks simulated
         else:
-            dot_color = INACTIVE_GRAY
+            dot_color = INACTIVE_GRAY      # DISABLED — manual only
         self._compact_dot.setStyleSheet(f"color: {dot_color}; font-size: 16px;")
 
-        # mode text
-        mode_text = "HALTED" if s.halted else ("PAUSED" if s.paused else s.mode)
+        # mode text — prefer the Enabled/Disabled terminology the HUD uses
+        if s.halted:
+            mode_text = "HALTED"
+        elif s.paused:
+            mode_text = "PAUSED"
+        elif s.auto_enabled and s.armed:
+            mode_text = "ENABLED"
+        elif not s.auto_enabled:
+            mode_text = "DISABLED"
+        else:
+            mode_text = s.mode
         self._compact_mode.setText(mode_text)
         self._compact_mode.setStyleSheet(
             f"font-weight: 700; font-size: 11px; letter-spacing: 1px; color: {dot_color};"
@@ -617,6 +678,32 @@ class FloatingHud(QWidget):
     def _on_halt(self) -> None:
         if self.controller:
             self.controller.halt("operator_halt")
+
+    def _on_bot_toggle(self) -> None:
+        """The big ENABLE/DISABLE toggle. Enabling goes through the
+        ArmConfirmDialog if the bot isn't already armed (so manual clicks
+        will be live), then flips auto_enabled on. Disabling is instant
+        and only flips auto_enabled off — armed state (and therefore
+        live manual execution) is preserved."""
+        from app.ui.dialogs.arm_confirm_dialog import ArmConfirmDialog
+        if self.controller is None:
+            return
+        if self.state.auto_enabled:
+            # Disabling — no confirmation needed, it's the safer action.
+            err = self.controller.disable_bot()
+            if err:
+                self._show_toast(err)
+            return
+        # Enabling — require armed + auto_enabled=True.
+        if not self.state.armed:
+            dlg = ArmConfirmDialog(self.controller, self.state, self)
+            if not dlg.exec():
+                return
+            err = self.controller.arm()
+            if err:
+                self._show_toast(err)
+                return
+        self.controller.set_auto_enabled(True)
 
     @Slot(str)
     def _show_toast(self, message: str) -> None:

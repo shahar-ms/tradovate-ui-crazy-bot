@@ -44,6 +44,10 @@ class UiState:
     last_intent_action: Optional[str] = None
     last_intent_reason: Optional[str] = None
     signals_emitted_count: int = 0
+    # Auto-trading toggle exposed on the HUD.
+    #   auto_enabled=True  -> strategy fires entries + exits
+    #   auto_enabled=False -> manual buttons + OCR only; strategy is silent
+    auto_enabled: bool = True
 
     # execution
     last_ack_status: Optional[str] = None

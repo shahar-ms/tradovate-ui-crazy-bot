@@ -156,6 +156,26 @@ class UiController(QObject):
         self._supervisor.submit_command("disarm")
         emit_event(self.signals, "info", "controller", "disarm requested")
 
+    # ---- high-level enable / disable of auto trading ---- #
+
+    def set_auto_enabled(self, enabled: bool) -> None:
+        """Toggle the strategy's auto-trading. When False the engine stops
+        emitting entry/exit intents; manual buttons + OCR keep running."""
+        if self._supervisor is None:
+            return
+        self._supervisor.deps.engine.auto_enabled = enabled
+        self.state.auto_enabled = enabled
+        emit_event(self.signals, "info", "controller",
+                   f"auto trading {'ENABLED' if enabled else 'DISABLED'}")
+
+    def disable_bot(self) -> Optional[str]:
+        """High-level 'Disable Bot': stop auto trading but keep the armed
+        execution path (so manual BUY/SELL still click for real)."""
+        if self._supervisor is None:
+            return "not_running"
+        self.set_auto_enabled(False)
+        return None
+
     def halt(self, reason: str = "operator_halt") -> None:
         if self._supervisor is None:
             return
@@ -323,6 +343,9 @@ class UiController(QObject):
                     "reject_reason": latest.reject_reason,
                     "frame_id": latest.frame_id,
                 })
+
+        # auto-trading toggle (set by HUD Enable/Disable button)
+        self.state.auto_enabled = bool(getattr(sup.deps.engine, "auto_enabled", True))
 
         # position
         pos = sup.deps.engine.state.position

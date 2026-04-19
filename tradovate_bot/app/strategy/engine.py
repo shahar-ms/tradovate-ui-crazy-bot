@@ -82,6 +82,11 @@ class StrategyEngine:
         # Guards state transitions when both the bar-driven path and manual
         # HUD clicks can arrive concurrently.
         self._transition_lock = threading.Lock()
+        # When False the engine still updates bars/levels/state for bookkeeping
+        # but will NOT emit auto entry or exit intents. Manual submissions via
+        # submit_manual_intent are unaffected. Operator toggles this from the
+        # HUD "Enable/Disable Bot" control.
+        self.auto_enabled: bool = True
         self._pending_exit_action: Optional[SignalActionT] = None
 
     # ---- externally driven state ---- #
@@ -190,6 +195,12 @@ class StrategyEngine:
 
         out: list[SignalIntent] = []
 
+        # Bookkeeping above always runs so position tracking + level detection
+        # stay correct when the operator re-enables auto. But when auto is
+        # disabled, we don't emit any auto entry or exit intents.
+        if not self.auto_enabled:
+            return out
+
         # time-stop exit
         if self.state.is_in_position():
             pos = self.state.position
@@ -244,6 +255,9 @@ class StrategyEngine:
     # ---- exits ---- #
 
     def _check_exit_on_tick(self, price: float) -> Optional[SignalIntent]:
+        # Auto exits (stop/target) only fire when auto trading is enabled.
+        if not self.auto_enabled:
+            return None
         pos = self.state.position
         if pos.side == "long":
             if pos.stop_price is not None and price <= pos.stop_price:

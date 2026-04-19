@@ -301,6 +301,59 @@ def test_calibration_dialog_has_maximize_toggle(qtbot):
     assert dlg.maximize_btn.text() in ("Maximize", "Restore")
 
 
+def test_hud_bot_state_row_shows_enabled_when_auto_plus_armed(qtbot):
+    hud, ctrl, state = _build_hud(qtbot)
+    ctrl.is_running_val = True
+    state.mode = "ARMED"
+    state.armed = True
+    state.auto_enabled = True
+    state.calibration_loaded = True
+    hud._refresh_all()
+    assert "ENABLED" in hud._bot_state_lbl.text()
+    assert hud._bot_toggle_btn.text() == "Disable Bot"
+
+
+def test_hud_bot_state_row_shows_disabled_when_auto_off(qtbot):
+    hud, ctrl, state = _build_hud(qtbot)
+    ctrl.is_running_val = True
+    state.mode = "ARMED"
+    state.armed = True
+    state.auto_enabled = False
+    state.calibration_loaded = True
+    hud._refresh_all()
+    assert "DISABLED" in hud._bot_state_lbl.text()
+    assert hud._bot_toggle_btn.text() == "Enable Bot"
+
+
+def test_hud_bot_toggle_when_enabled_calls_disable_bot(qtbot):
+    hud, ctrl, state = _build_hud(qtbot)
+    ctrl.is_running_val = True
+    state.armed = True
+    state.auto_enabled = True
+    state.calibration_loaded = True
+    # stub disable_bot on the fake controller
+    ctrl.disable_bot_calls = 0
+    ctrl.disable_bot = lambda: (ctrl.__setattr__('disable_bot_calls',
+                                                  ctrl.disable_bot_calls + 1), None)[1]
+    hud._refresh_all()
+    hud._bot_toggle_btn.click()
+    assert ctrl.disable_bot_calls == 1
+
+
+def test_hud_compact_view_shows_enabled_disabled(qtbot):
+    hud, _, state = _build_hud(qtbot)
+    state.last_price = 19234.25
+    state.armed = True
+    state.auto_enabled = True
+    hud._set_minimized(True)
+    hud._refresh_all()
+    assert hud._compact_mode.text() == "ENABLED"
+
+    state.auto_enabled = False
+    hud._refresh_all()
+    assert hud._compact_mode.text() == "DISABLED"
+
+
 def test_hud_starts_expanded(qtbot):
     hud, _, _ = _build_hud(qtbot)
     assert hud._minimized is False

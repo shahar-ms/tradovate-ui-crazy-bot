@@ -236,6 +236,50 @@ def test_manual_exit_long_only_when_long():
     assert any(i.action == "EXIT_LONG" for i in returned)
 
 
+def test_engine_auto_disabled_blocks_auto_entries():
+    """When auto_enabled is False, bar-driven entries must not fire."""
+    cfg = _in_session_cfg(min_touches_for_level=2)
+    eng, intents = _engine(cfg)
+    eng.auto_enabled = False
+
+    seconds = _build_resistance_bars_then_sweep(resistance=100.0, n_setup=10)
+    _feed(eng, seconds)
+
+    # No BUY/SELL should be emitted while auto is off
+    actions = [i.action for i in intents]
+    assert "BUY" not in actions
+    assert "SELL" not in actions
+
+
+def test_engine_auto_disabled_blocks_stop_loss_exits():
+    """Auto exits (stop loss) must not fire when auto_enabled is False."""
+    cfg = _in_session_cfg(stop_loss_points=2.0, take_profit_points=50.0,
+                          time_stop_bars=1000)
+    eng, intents = _engine(cfg)
+    eng.auto_enabled = False
+
+    # force into a short position manually
+    eng.state.to_pending_entry("SELL", 100.0, 102.0, 90.0)
+    eng.state.confirm_entry(100.0)
+
+    # tick that would have hit the stop
+    eng.on_tick(_tick(1_700_000_000_500, 103.0, 1))
+    # no exit fired because auto is off — operator must exit manually
+    assert not any(i.action == "EXIT_SHORT" for i in intents)
+
+
+def test_engine_auto_disabled_still_allows_manual_intents():
+    """Manual intents must work even when auto is disabled."""
+    cfg = _in_session_cfg()
+    eng, intents = _engine(cfg)
+    eng.auto_enabled = False
+    eng._last_accepted_price = 100.0
+
+    ok, _, returned = eng.submit_manual_intent("BUY", reason="hud")
+    assert ok
+    assert any(i.action == "BUY" for i in returned)
+
+
 def test_engine_no_double_entry_while_in_position():
     cfg = _in_session_cfg()
     eng, intents = _engine(cfg)
