@@ -51,10 +51,10 @@ HUD_COMPACT_WIDTH = 210
 HUD_COMPACT_HEIGHT = 38
 HUD_LEFT_MARGIN = 20
 # Fraction of the available screen height at which the HUD's TOP edge
-# is anchored by default. The HUD extends downward from there. 0.65 puts
-# the HUD body in the lower-third of the screen, well out of the usual
-# Tradovate chart area.
-HUD_VERTICAL_PCT = 0.65
+# is anchored by default. The HUD extends downward from there. 0.35
+# puts the HUD top ~1/3 of the way down the screen, below a typical
+# Tradovate header but still well above the bottom.
+HUD_VERTICAL_PCT = 0.35
 
 POSITION_FILE = "hud_pos.json"
 
@@ -394,9 +394,11 @@ class FloatingHud(QWidget):
 
     # ---- positioning (persist across runs) ---- #
 
-    def place_default(self) -> None:
-        # try saved first
-        if self._restore_saved_position():
+    def place_default(self, use_saved: bool = True) -> None:
+        """Place the HUD. By default, tries the last-saved position first.
+        Pass `use_saved=False` to force the computed default (used by the
+        context menu's 'Reset position' action)."""
+        if use_saved and self._restore_saved_position():
             return
         screen = QGuiApplication.primaryScreen()
         if screen is None:
@@ -713,7 +715,9 @@ class FloatingHud(QWidget):
         menu.addAction(toggle_act)
 
         reset = QAction("Reset position", menu)
-        reset.triggered.connect(lambda: (self.place_default(), self.save_position()))
+        reset.triggered.connect(
+            lambda: (self.place_default(use_saved=False), self.save_position())
+        )
         menu.addAction(reset)
 
         setup = QAction("Open Calibration (Setup)", menu)

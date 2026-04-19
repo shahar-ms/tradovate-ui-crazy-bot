@@ -365,28 +365,58 @@ def test_hud_compact_view_shows_on_off(qtbot):
     assert hud._compact_mode.text() == "OFF"
 
 
-def test_hud_default_position_anchors_top_at_65pct(qtbot, tmp_path, monkeypatch):
-    """place_default() should anchor the HUD's TOP edge at ~65% of the
-    screen height, so the body sits in the lower-third of the screen."""
+def test_hud_default_position_anchors_top_below_screen_top(qtbot, tmp_path, monkeypatch):
+    """place_default() anchors the HUD's TOP edge at HUD_VERTICAL_PCT of the
+    screen height (not its center), and places it flush against the left edge
+    + HUD_LEFT_MARGIN."""
     from PySide6.QtGui import QGuiApplication
     from app.utils import paths
-    from app.ui.widgets.floating_hud import HUD_HEIGHT, HUD_VERTICAL_PCT
+    from app.ui.widgets.floating_hud import (HUD_HEIGHT, HUD_LEFT_MARGIN,
+                                             HUD_VERTICAL_PCT)
 
     # no saved position → place_default takes the fresh path
     monkeypatch.setattr(paths, "state_dir", lambda: tmp_path)
 
     hud, _, _ = _build_hud(qtbot)
-    hud.place_default()
+    hud.place_default(use_saved=False)
 
     screen = QGuiApplication.primaryScreen()
     geom = screen.availableGeometry()
     expected_top = geom.top() + int(geom.height() * HUD_VERTICAL_PCT)
-    # clamp ceiling: geom.bottom() - HUD_HEIGHT - 10
     expected_top = max(geom.top() + 10,
                        min(expected_top, geom.bottom() - HUD_HEIGHT - 10))
     assert hud.y() == expected_top
-    # HUD_VERTICAL_PCT is expected to be 0.65 per current design
-    assert HUD_VERTICAL_PCT == 0.65
+    assert hud.x() == geom.left() + HUD_LEFT_MARGIN
+    # sanity: the chosen anchor is below the very top (not 0.0)
+    assert HUD_VERTICAL_PCT > 0.1
+
+
+def test_hud_reset_position_bypasses_saved_file(qtbot, tmp_path, monkeypatch):
+    """The 'Reset position' action must use the computed default even if a
+    saved position exists (otherwise the old file would keep winning)."""
+    import json
+    from PySide6.QtGui import QGuiApplication
+    from app.utils import paths
+    from app.ui.widgets.floating_hud import HUD_LEFT_MARGIN, HUD_VERTICAL_PCT
+
+    monkeypatch.setattr(paths, "state_dir", lambda: tmp_path)
+    # Seed a stale saved position way up in the top-left corner.
+    (tmp_path / "hud_pos.json").write_text(
+        json.dumps({"x": 5, "y": 5, "minimized": False}), encoding="utf-8"
+    )
+
+    hud, _, _ = _build_hud(qtbot)
+    # The default-with-saved path would restore (5, 5)
+    hud.place_default(use_saved=True)
+    assert (hud.x(), hud.y()) == (5, 5)
+
+    # Reset-path bypasses saved and uses the computed default.
+    hud.place_default(use_saved=False)
+    screen = QGuiApplication.primaryScreen()
+    geom = screen.availableGeometry()
+    assert hud.x() == geom.left() + HUD_LEFT_MARGIN
+    # top should have moved off (5) to the HUD_VERTICAL_PCT anchor
+    assert hud.y() != 5
 
 
 def test_hud_starts_expanded(qtbot):
