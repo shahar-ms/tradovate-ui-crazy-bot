@@ -63,6 +63,14 @@ class _FakeController:
         self.arm_calls += 1
         return None
 
+    def turn_on(self):
+        self.arm_calls += 1
+        return None
+
+    def turn_off(self):
+        self.disarm_calls += 1
+        return None
+
     def pre_arm_checks(self):
         return []
 
@@ -134,14 +142,13 @@ def test_hud_button_rules(qtbot):
     assert not hud._buy_btn.isEnabled()
     assert not hud._sell_btn.isEnabled()
     assert not hud._cancel_btn.isEnabled()
-    assert not hud._arm_btn.isEnabled()
-    assert not hud._disarm_btn.isEnabled()
+    assert not hud._bot_toggle_btn.isEnabled()
     assert not hud._halt_btn.isEnabled()
     assert hud._setup_btn.isEnabled()
 
     # running + flat + not halted + not armed + calibrated:
-    # BUY/SELL/CANCEL are DISABLED (armed=False means clicks would be dry-run)
-    # ARM/HALT are enabled
+    # BUY/SELL/CANCEL are DISABLED (armed=False ⇒ clicks are dry-run),
+    # the single BOT power toggle + HALT are enabled.
     ctrl.is_running_val = True
     state.position_side = "flat"
     state.halted = False
@@ -151,12 +158,12 @@ def test_hud_button_rules(qtbot):
     assert not hud._buy_btn.isEnabled()
     assert not hud._sell_btn.isEnabled()
     assert not hud._cancel_btn.isEnabled()
-    assert hud._arm_btn.isEnabled()
-    assert not hud._disarm_btn.isEnabled()
+    assert hud._bot_toggle_btn.isEnabled()
     assert hud._halt_btn.isEnabled()
 
-    # once armed, BUY/SELL/CANCEL come online (clicks now reach Tradovate)
+    # once the bot is ON (armed + auto): BUY/SELL/CANCEL come online.
     state.armed = True
+    state.auto_enabled = True
     hud._refresh_all()
     assert hud._buy_btn.isEnabled()
     assert hud._sell_btn.isEnabled()
@@ -169,10 +176,10 @@ def test_hud_button_rules(qtbot):
     assert not hud._sell_btn.isEnabled()
     assert hud._cancel_btn.isEnabled()
 
-    # halted → arm + cancel disabled
+    # halted → toggle + cancel disabled
     state.halted = True
     hud._refresh_all()
-    assert not hud._arm_btn.isEnabled()
+    assert not hud._bot_toggle_btn.isEnabled()
     assert not hud._cancel_btn.isEnabled()
 
 
@@ -186,8 +193,7 @@ def test_buy_button_routes_through_controller(qtbot):
     assert ctrl.manual_calls == ["BUY"]
 
 
-def test_cancel_and_disarm_and_halt_route_correctly(qtbot, monkeypatch):
-    # silence modal dialogs the original buttons might pop
+def test_cancel_and_halt_route_correctly(qtbot, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Yes)
 
     hud, ctrl, state = _build_hud(qtbot)
@@ -198,9 +204,6 @@ def test_cancel_and_disarm_and_halt_route_correctly(qtbot, monkeypatch):
 
     hud._cancel_btn.click()
     assert ctrl.cancel_all_calls == 1
-
-    hud._disarm_btn.click()
-    assert ctrl.disarm_calls == 1
 
     hud._halt_btn.click()
     assert ctrl.halt_calls == ["operator_halt"]
@@ -226,7 +229,6 @@ def test_hud_shows_paused_banner_and_disables_entry_buttons(qtbot):
     # entry buttons disabled while paused
     assert not hud._buy_btn.isEnabled()
     assert not hud._sell_btn.isEnabled()
-    assert not hud._arm_btn.isEnabled()
     # CANCEL ALL and HALT still available while paused (safety actions)
     assert hud._cancel_btn.isEnabled()
     assert hud._halt_btn.isEnabled()
@@ -312,57 +314,55 @@ def test_calibration_dialog_has_maximize_toggle(qtbot):
     assert dlg.maximize_btn.text() in ("Maximize", "Restore")
 
 
-def test_hud_bot_state_row_shows_enabled_when_auto_plus_armed(qtbot):
+def test_hud_bot_state_row_shows_on_when_armed_plus_auto(qtbot):
     hud, ctrl, state = _build_hud(qtbot)
     ctrl.is_running_val = True
-    state.mode = "ARMED"
     state.armed = True
     state.auto_enabled = True
     state.calibration_loaded = True
     hud._refresh_all()
-    assert "ENABLED" in hud._bot_state_lbl.text()
-    assert hud._bot_toggle_btn.text() == "Disable Bot"
+    assert "ON" in hud._bot_state_lbl.text()
+    assert hud._bot_toggle_btn.text() == "Turn OFF"
 
 
-def test_hud_bot_state_row_shows_disabled_when_auto_off(qtbot):
+def test_hud_bot_state_row_shows_off_when_disarmed(qtbot):
     hud, ctrl, state = _build_hud(qtbot)
     ctrl.is_running_val = True
-    state.mode = "ARMED"
-    state.armed = True
+    state.armed = False
     state.auto_enabled = False
     state.calibration_loaded = True
     hud._refresh_all()
-    assert "DISABLED" in hud._bot_state_lbl.text()
-    assert hud._bot_toggle_btn.text() == "Enable Bot"
+    assert "OFF" in hud._bot_state_lbl.text()
+    assert hud._bot_toggle_btn.text() == "Turn ON"
 
 
-def test_hud_bot_toggle_when_enabled_calls_disable_bot(qtbot):
+def test_hud_bot_toggle_when_on_calls_turn_off(qtbot):
     hud, ctrl, state = _build_hud(qtbot)
     ctrl.is_running_val = True
     state.armed = True
     state.auto_enabled = True
     state.calibration_loaded = True
-    # stub disable_bot on the fake controller
-    ctrl.disable_bot_calls = 0
-    ctrl.disable_bot = lambda: (ctrl.__setattr__('disable_bot_calls',
-                                                  ctrl.disable_bot_calls + 1), None)[1]
+    ctrl.turn_off_calls = 0
+    ctrl.turn_off = lambda: (ctrl.__setattr__('turn_off_calls',
+                                               ctrl.turn_off_calls + 1), None)[1]
     hud._refresh_all()
     hud._bot_toggle_btn.click()
-    assert ctrl.disable_bot_calls == 1
+    assert ctrl.turn_off_calls == 1
 
 
-def test_hud_compact_view_shows_enabled_disabled(qtbot):
+def test_hud_compact_view_shows_on_off(qtbot):
     hud, _, state = _build_hud(qtbot)
     state.last_price = 19234.25
     state.armed = True
     state.auto_enabled = True
     hud._set_minimized(True)
     hud._refresh_all()
-    assert hud._compact_mode.text() == "ENABLED"
+    assert hud._compact_mode.text() == "ON"
 
     state.auto_enabled = False
+    state.armed = False
     hud._refresh_all()
-    assert hud._compact_mode.text() == "DISABLED"
+    assert hud._compact_mode.text() == "OFF"
 
 
 def test_hud_starts_expanded(qtbot):
@@ -402,13 +402,14 @@ def test_hud_set_minimized_is_idempotent(qtbot):
 
 def test_hud_compact_view_reflects_state(qtbot):
     hud, _, state = _build_hud(qtbot)
-    state.mode = "PAPER"
     state.last_price = 19234.25
     state.position_side = "long"
+    state.armed = True
+    state.auto_enabled = True
     hud._set_minimized(True)
     hud._refresh_all()
     assert hud._compact_price.text() == "19234.25"
-    assert hud._compact_mode.text() == "PAPER"
+    assert hud._compact_mode.text() == "ON"
     assert hud._compact_pos.text() == "LONG"
 
 

@@ -204,15 +204,13 @@ class FloatingHud(QWidget):
         row6.addWidget(self._cancel_btn, 1)
         root.addLayout(row6)
 
-        # row 7: ARM / DISARM / HALT / Setup
+        # row 7: HALT + Setup (secondary controls — the main ON/OFF toggle
+        # replaces the old ARM/DISARM/ENABLE/DISABLE quartet). The arm-
+        # confirmation dialog still runs when turning ON.
         row7 = QHBoxLayout()
         row7.setSpacing(4)
-        self._arm_btn = self._make_button("ARM", role="arm", small=True)
-        self._disarm_btn = self._make_button("DISARM", small=True)
         self._halt_btn = self._make_button("HALT", role="halt", small=True)
         self._setup_btn = self._make_button("Setup", small=True)
-        row7.addWidget(self._arm_btn)
-        row7.addWidget(self._disarm_btn)
         row7.addWidget(self._halt_btn)
         row7.addWidget(self._setup_btn)
         root.addLayout(row7)
@@ -374,8 +372,6 @@ class FloatingHud(QWidget):
         self._buy_btn.clicked.connect(self._on_buy)
         self._sell_btn.clicked.connect(self._on_sell)
         self._cancel_btn.clicked.connect(self._on_cancel_all)
-        self._arm_btn.clicked.connect(self._on_arm)
-        self._disarm_btn.clicked.connect(self._on_disarm)
         self._halt_btn.clicked.connect(self._on_halt)
         self._setup_btn.clicked.connect(self.setup_requested.emit)
         self._bot_toggle_btn.clicked.connect(self._on_bot_toggle)
@@ -552,35 +548,28 @@ class FloatingHud(QWidget):
             )
         else:
             self._cancel_btn.setToolTip("")
-        # ARM requires calibration + not paused + not halted + not already armed
-        self._arm_btn.setEnabled(
-            running and not armed and not halted and not paused and s.calibration_loaded
-        )
-        self._disarm_btn.setEnabled(running and armed)
         self._halt_btn.setEnabled(running)
         self._setup_btn.setEnabled(True)
 
-        # --- BOT state row (Enabled = auto strategy live; Disabled = manual only) --- #
+        # --- BOT single power toggle: ON = armed + auto; OFF = neither --- #
+        bot_on = bool(armed and s.auto_enabled)
         if halted:
             bot_text, bot_color, btn_text, btn_role = (
                 "BOT: HALTED", BROKEN_RED, "Halted", "danger",
             )
         elif paused:
             bot_text, bot_color, btn_text, btn_role = (
-                "BOT: PAUSED", DEGRADED_YELLOW, "Disable Bot" if s.auto_enabled else "Enable Bot",
-                "danger" if s.auto_enabled else "arm",
+                "BOT: PAUSED", DEGRADED_YELLOW,
+                "Turn OFF" if bot_on else "Turn ON",
+                "danger" if bot_on else "arm",
             )
-        elif s.auto_enabled and armed:
+        elif bot_on:
             bot_text, bot_color, btn_text, btn_role = (
-                "BOT: ENABLED", OK_GREEN, "Disable Bot", "danger",
+                "BOT: ON", OK_GREEN, "Turn OFF", "danger",
             )
-        elif s.auto_enabled and not armed:
+        else:
             bot_text, bot_color, btn_text, btn_role = (
-                "BOT: READY (not armed)", DEGRADED_YELLOW, "Enable Bot", "arm",
-            )
-        else:  # auto disabled
-            bot_text, bot_color, btn_text, btn_role = (
-                "BOT: DISABLED", INACTIVE_GRAY, "Enable Bot", "arm",
+                "BOT: OFF", INACTIVE_GRAY, "Turn ON", "arm",
             )
         self._bot_state_lbl.setText(bot_text)
         self._bot_state_lbl.setStyleSheet(
@@ -588,7 +577,6 @@ class FloatingHud(QWidget):
         )
         self._bot_toggle_btn.setText(btn_text)
         self._bot_toggle_btn.setProperty("role", btn_role)
-        # re-polish so the role style change takes effect
         self._bot_toggle_btn.style().unpolish(self._bot_toggle_btn)
         self._bot_toggle_btn.style().polish(self._bot_toggle_btn)
         self._bot_toggle_btn.setEnabled(running and not halted)
@@ -618,11 +606,9 @@ class FloatingHud(QWidget):
         elif s.paused:
             mode_text = "PAUSED"
         elif s.auto_enabled and s.armed:
-            mode_text = "ENABLED"
-        elif not s.auto_enabled:
-            mode_text = "DISABLED"
+            mode_text = "ON"
         else:
-            mode_text = s.mode
+            mode_text = "OFF"
         self._compact_mode.setText(mode_text)
         self._compact_mode.setStyleSheet(
             f"font-weight: 700; font-size: 11px; letter-spacing: 1px; color: {dot_color};"
@@ -675,50 +661,34 @@ class FloatingHud(QWidget):
         if self.controller:
             self.controller.cancel_all()
 
-    def _on_arm(self) -> None:
-        # delegate to the ArmConfirmDialog the existing code already has
-        from app.ui.dialogs.arm_confirm_dialog import ArmConfirmDialog
-        if self.controller is None:
-            return
-        dlg = ArmConfirmDialog(self.controller, self.state, self)
-        if dlg.exec():
-            err = self.controller.arm()
-            if err:
-                self._show_toast(err)
-
-    def _on_disarm(self) -> None:
-        if self.controller:
-            self.controller.disarm()
-
     def _on_halt(self) -> None:
         if self.controller:
             self.controller.halt("operator_halt")
 
     def _on_bot_toggle(self) -> None:
-        """The big ENABLE/DISABLE toggle. Enabling goes through the
-        ArmConfirmDialog if the bot isn't already armed (so manual clicks
-        will be live), then flips auto_enabled on. Disabling is instant
-        and only flips auto_enabled off — armed state (and therefore
-        live manual execution) is preserved."""
+        """Single power toggle. ON = armed + strategy auto. OFF = disarmed
+        (clicks can't reach Tradovate) + strategy silent. Price OCR runs
+        in both states.
+
+        Turning ON pops the ArmConfirmDialog once so the operator
+        explicitly acknowledges live execution. Turning OFF is instant
+        (it's the safer direction)."""
         from app.ui.dialogs.arm_confirm_dialog import ArmConfirmDialog
         if self.controller is None:
             return
-        if self.state.auto_enabled:
-            # Disabling — no confirmation needed, it's the safer action.
-            err = self.controller.disable_bot()
+        bot_is_on = bool(self.state.armed and self.state.auto_enabled)
+        if bot_is_on:
+            err = self.controller.turn_off()
             if err:
                 self._show_toast(err)
             return
-        # Enabling — require armed + auto_enabled=True.
-        if not self.state.armed:
-            dlg = ArmConfirmDialog(self.controller, self.state, self)
-            if not dlg.exec():
-                return
-            err = self.controller.arm()
-            if err:
-                self._show_toast(err)
-                return
-        self.controller.set_auto_enabled(True)
+        # Turning ON — single confirmation path.
+        dlg = ArmConfirmDialog(self.controller, self.state, self)
+        if not dlg.exec():
+            return
+        err = self.controller.turn_on()
+        if err:
+            self._show_toast(err)
 
     @Slot(str)
     def _show_toast(self, message: str) -> None:

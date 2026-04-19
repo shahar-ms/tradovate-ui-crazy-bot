@@ -176,6 +176,32 @@ class UiController(QObject):
         self.set_auto_enabled(False)
         return None
 
+    # ---- single-toggle ON/OFF (the simplified HUD uses these) ---- #
+
+    def turn_on(self) -> Optional[str]:
+        """Bot ON = full live mode: armed (manual + auto clicks go live)
+        AND strategy auto-trades entries/exits. Returns an error string if
+        arming fails (e.g. pre-arm checks blocked)."""
+        if self._supervisor is None:
+            return "not_running"
+        err = self.arm()
+        if err is not None:
+            return err
+        self.set_auto_enabled(True)
+        return None
+
+    def turn_off(self) -> Optional[str]:
+        """Bot OFF = price OCR keeps running, but no trading: strategy
+        silent AND execution disarmed (clicks simulated, can't reach
+        Tradovate). Safe default."""
+        if self._supervisor is None:
+            return None
+        # Disable strategy first, then disarm — avoids a one-tick window
+        # where the strategy could still emit.
+        self.set_auto_enabled(False)
+        self.disarm()
+        return None
+
     def halt(self, reason: str = "operator_halt") -> None:
         if self._supervisor is None:
             return
