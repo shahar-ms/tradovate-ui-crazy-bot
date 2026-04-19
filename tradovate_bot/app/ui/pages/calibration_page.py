@@ -194,8 +194,17 @@ class CalibrationPage(QWidget):
 
         row3 = QHBoxLayout()
         self.btn_reset_all = QPushButton("Reset all marks")
-        self.btn_reset_all.setProperty("role", "danger")
+        self.btn_reset_all.setToolTip(
+            "Clear every marked item in this editor. The saved JSON on disk is kept."
+        )
+        self.btn_delete_saved = QPushButton("Delete saved calibration")
+        self.btn_delete_saved.setProperty("role", "danger")
+        self.btn_delete_saved.setToolTip(
+            "Delete screen_map.json and its reference images from disk. "
+            "The bot will refuse to start until you calibrate again."
+        )
         row3.addWidget(self.btn_reset_all)
+        row3.addWidget(self.btn_delete_saved)
         actions_panel.add(self._wrap_row(row3))
 
         right_lay.addWidget(actions_panel)
@@ -227,6 +236,7 @@ class CalibrationPage(QWidget):
         self.btn_validate.clicked.connect(lambda: self._validate(offline=False))
         self.btn_validate_offline.clicked.connect(lambda: self._validate(offline=True))
         self.btn_reset_all.clicked.connect(self._reset_all_marks)
+        self.btn_delete_saved.clicked.connect(self._delete_saved_calibration)
 
         self._refresh_items_list()
         self._refresh_status()
@@ -698,3 +708,65 @@ class CalibrationPage(QWidget):
         self.targets = CalibTargets()
         self._redraw_overlays()
         self._refresh_items_list()
+
+    def _delete_saved_calibration(self) -> None:
+        sm_path = paths.screen_map_path()
+        anchor_path = paths.anchor_reference_path()
+        full_path = paths.calibration_full_path()
+        overlay_path = paths.calibration_overlay_path()
+        price_ref_path = paths.screenshots_dir() / "price_region_reference.png"
+        candidates = [sm_path, anchor_path, full_path, overlay_path, price_ref_path]
+        existing = [p for p in candidates if p.exists()]
+
+        if not existing:
+            QMessageBox.information(
+                self, "Nothing to delete",
+                f"No saved calibration files under\n{paths.config_dir()}\nand\n"
+                f"{paths.screenshots_dir()}."
+            )
+            return
+
+        file_list = "\n".join(f"  • {p}" for p in existing)
+        confirm = QMessageBox.question(
+            self, "Delete saved calibration?",
+            "This will DELETE the saved calibration files:\n\n"
+            f"{file_list}\n\n"
+            "The bot will refuse to start until you calibrate again. "
+            "Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        deleted: list[Path] = []
+        errors: list[str] = []
+        for p in existing:
+            try:
+                p.unlink()
+                deleted.append(p)
+            except Exception as e:
+                errors.append(f"{p.name}: {e}")
+
+        # also clear in-memory editor state so the UI doesn't pretend the
+        # calibration still exists
+        self.targets = CalibTargets()
+        self._full_image = None
+        self._image_source = "none"
+        self._monitor_size = (0, 0)
+        self.canvas.clear_image()
+        self._redraw_overlays()
+        self._refresh_items_list()
+        self._refresh_status()
+        self._refresh_image_buttons()
+
+        emit_event(self.signals, "warn", "calibration",
+                   f"deleted saved calibration ({len(deleted)} files)")
+        self.signals.calibration_reloaded.emit()
+
+        msg = f"Deleted {len(deleted)} file(s):\n" + \
+              "\n".join(f"  • {p}" for p in deleted)
+        if errors:
+            msg += "\n\nCould not delete:\n" + "\n".join(f"  • {e}" for e in errors)
+            QMessageBox.warning(self, "Partially deleted", msg)
+        else:
+            QMessageBox.information(self, "Deleted", msg)

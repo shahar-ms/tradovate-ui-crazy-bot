@@ -515,6 +515,92 @@ def test_calibration_image_buttons_toggle(qtbot):
     assert page.btn_reset_image.isEnabled()
 
 
+def test_calibration_delete_removes_saved_files(qtbot, tmp_path, monkeypatch):
+    """Delete saved calibration removes files and clears editor state."""
+    import cv2
+    import numpy as np
+    from PySide6.QtWidgets import QMessageBox
+
+    from app.models.common import Point, Region
+    from app.ui.pages.calibration_page import CalibTargets, CalibrationPage
+    from app.utils import paths
+
+    # redirect all paths to tmp
+    (tmp_path / "app" / "config").mkdir(parents=True)
+    (tmp_path / "runtime" / "screenshots").mkdir(parents=True)
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path / "app" / "config")
+    monkeypatch.setattr(paths, "screenshots_dir", lambda: tmp_path / "runtime" / "screenshots")
+    monkeypatch.setattr(paths, "screen_map_path",
+                        lambda: tmp_path / "app" / "config" / "screen_map.json")
+    monkeypatch.setattr(paths, "anchor_reference_path",
+                        lambda: tmp_path / "runtime" / "screenshots" / "anchor_reference.png")
+    monkeypatch.setattr(paths, "calibration_full_path",
+                        lambda: tmp_path / "runtime" / "screenshots" / "calibration_full.png")
+    monkeypatch.setattr(paths, "calibration_overlay_path",
+                        lambda: tmp_path / "runtime" / "screenshots" / "calibration_overlay.png")
+
+    # seed some calibration files
+    paths.screen_map_path().write_text("{}", encoding="utf-8")
+    fake = np.zeros((10, 10, 3), dtype=np.uint8)
+    cv2.imwrite(str(paths.anchor_reference_path()), fake)
+    cv2.imwrite(str(paths.calibration_full_path()), fake)
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: QMessageBox.Ok)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **kw: QMessageBox.Ok)
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    # also seed in-memory state
+    page._full_image = fake
+    page.targets = CalibTargets(buy=Point(x=10, y=20))
+
+    page._delete_saved_calibration()
+
+    assert not paths.screen_map_path().exists()
+    assert not paths.anchor_reference_path().exists()
+    assert not paths.calibration_full_path().exists()
+    # editor state cleared
+    assert page._full_image is None
+    assert page.targets.buy is None
+
+
+def test_calibration_delete_noop_when_no_files(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from app.ui.pages.calibration_page import CalibrationPage
+    from app.utils import paths
+
+    (tmp_path / "app" / "config").mkdir(parents=True)
+    (tmp_path / "runtime" / "screenshots").mkdir(parents=True)
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
+    monkeypatch.setattr(paths, "config_dir", lambda: tmp_path / "app" / "config")
+    monkeypatch.setattr(paths, "screenshots_dir", lambda: tmp_path / "runtime" / "screenshots")
+    monkeypatch.setattr(paths, "screen_map_path",
+                        lambda: tmp_path / "app" / "config" / "screen_map.json")
+    monkeypatch.setattr(paths, "anchor_reference_path",
+                        lambda: tmp_path / "runtime" / "screenshots" / "anchor_reference.png")
+    monkeypatch.setattr(paths, "calibration_full_path",
+                        lambda: tmp_path / "runtime" / "screenshots" / "calibration_full.png")
+    monkeypatch.setattr(paths, "calibration_overlay_path",
+                        lambda: tmp_path / "runtime" / "screenshots" / "calibration_overlay.png")
+
+    info_calls = []
+    monkeypatch.setattr(QMessageBox, "information",
+                        lambda *a, **kw: info_calls.append(a) or QMessageBox.Ok)
+
+    signals = AppSignals()
+    page = CalibrationPage(signals)
+    qtbot.addWidget(page)
+
+    page._delete_saved_calibration()
+    # reached the "Nothing to delete" path and did not confirm-prompt
+    assert any("Nothing to delete" in str(call) for call in info_calls)
+
+
 def test_calibration_load_from_file_reads_png(qtbot, tmp_path, monkeypatch):
     import cv2
     import numpy as np
