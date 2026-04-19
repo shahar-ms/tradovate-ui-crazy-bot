@@ -183,6 +183,45 @@ def test_point_out_of_bounds_blocked():
     assert click.calls == []
 
 
+def test_fill_price_flows_from_ack_signal_to_execution_ack():
+    """When AckReader returns a fill_price, Executor propagates it to ExecutionAck."""
+    signal = AckSignal(status="ok", message="filled",
+                       fill_price=19234.25, fill_price_confidence=92.0,
+                       fill_price_source="position_ocr")
+    ack_reader = FakeAckReader(after_signal=signal)
+    ex, _, _ = _executor(FakeGuard(), ack_reader)
+    out = ex.execute(ExecutionIntent(action="BUY", reason="entry"))
+    assert out.status == "ok"
+    assert out.fill_price == 19234.25
+    assert out.fill_price_source == "position_ocr"
+    assert out.fill_price_confidence == 92.0
+
+
+def test_cancel_all_fill_price_is_none_and_source_unavailable():
+    signal = AckSignal(status="ok", message="cleared",
+                       fill_price_source="unavailable")
+    ack_reader = FakeAckReader(after_signal=signal)
+    ex, _, _ = _executor(FakeGuard(), ack_reader)
+    out = ex.execute(ExecutionIntent(action="CANCEL_ALL", reason="x"))
+    assert out.fill_price is None
+    assert out.fill_price_source == "unavailable"
+
+
+def test_executor_reload_screen_map_rebuilds_guard_and_ack_reader():
+    """reload_screen_map() swaps in a new ScreenMap and rebuilds helpers."""
+    ex, _, _ = _executor(FakeGuard(), FakeAckReader())
+    # swap to a deliberately-different screen map
+    new_sm = _screen_map().model_copy(update={
+        "buy_point": Point(x=42, y=42),
+        "sell_point": Point(x=99, y=99),
+    })
+    ex.reload_screen_map(new_sm)
+    assert ex.screen_map.buy_point.x == 42
+    # guard + ack_reader are new instances
+    assert ex.guard is not None
+    assert ex.ack_reader is not None
+
+
 def test_driver_exception_becomes_failed_ack():
     class BrokenDriver:
         def click_point(self, point):

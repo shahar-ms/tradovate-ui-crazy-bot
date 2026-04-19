@@ -14,6 +14,7 @@ Pipeline per tick:
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
@@ -78,6 +79,9 @@ class StrategyEngine:
         self._price_stream_ok: bool = True
         self.debug = EngineDebug()
         self._last_accepted_price: Optional[float] = None
+        # Guards state transitions when both the bar-driven path and manual
+        # HUD clicks can arrive concurrently.
+        self._transition_lock = threading.Lock()
         self._pending_exit_action: Optional[SignalActionT] = None
 
     # ---- externally driven state ---- #
@@ -92,6 +96,60 @@ class StrategyEngine:
     def on_execution_ack_unknown(self) -> None:
         """Halt because the execution adapter could not confirm success."""
         self.halt("execution_ack_unknown")
+
+    # ---- manual intents (HUD-originated) ---- #
+
+    def submit_manual_intent(self, action: SignalActionT,
+                             reason: str = "manual_hud") -> tuple[bool, str]:
+        """
+        Route a HUD-originated click through the strategy state machine.
+
+        Accepts: BUY / SELL (entries), CANCEL_ALL (any time), EXIT_LONG / EXIT_SHORT
+        (only while LONG / SHORT respectively). Rejects silently-dangerous
+        combinations (buy while long, sell while short, etc) so we never
+        implicitly flip or pyramid a position.
+
+        Returns (accepted, message). On accept, the intent is also emitted
+        through the same pipeline a strategy-generated intent uses, so the
+        Supervisor/Executor handle it identically.
+        """
+        with self._transition_lock:
+            if self.state.is_halted():
+                return False, "halted"
+
+            price = self._last_accepted_price
+
+            if action == "CANCEL_ALL":
+                # CANCEL_ALL is always safe to emit — it never enters a position
+                self._build_intent("CANCEL_ALL", reason, price)
+                return True, "emitted"
+
+            if action in ("BUY", "SELL"):
+                if not self.state.is_flat():
+                    return False, "position active \u2014 use Cancel All first"
+                if not self._price_stream_ok:
+                    return False, "price stream not ok"
+                decision = self.risk.can_enter(self._now_utc(), self._price_stream_ok)
+                if not decision.can_enter:
+                    return False, decision.reason or "risk blocked"
+                if price is None:
+                    return False, "no price yet"
+                self._initiate_entry(action, trigger_price=price, reason=reason)
+                return True, "emitted"
+
+            if action == "EXIT_LONG":
+                if not self.state.is_long():
+                    return False, "not in a long position"
+                self._build_exit(reason)
+                return True, "emitted"
+
+            if action == "EXIT_SHORT":
+                if not self.state.is_short():
+                    return False, "not in a short position"
+                self._build_exit(reason)
+                return True, "emitted"
+
+            return False, f"unsupported manual action: {action}"
 
     # ---- tick handling ---- #
 

@@ -42,8 +42,8 @@ class AppSignals(QObject):
     # connection to runtime (controller lifecycle)
     controller_state_changed = Signal(str)     # "stopped" | "running" | "error"
 
-    # floating HUD -> main window
-    hud_show_main_requested = Signal()
+    # floating HUD feedback
+    manual_rejected = Signal(str)              # reason string for HUD toast
 
 
 # Convenience helper for emitting an event log row from anywhere.

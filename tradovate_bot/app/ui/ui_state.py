@@ -46,6 +46,12 @@ class UiState:
     last_ack_ts_ms: int = 0
     consecutive_unknown_acks: int = 0
 
+    # verified broker fill price (from OCR of the position region)
+    fill_price: Optional[float] = None
+    fill_price_source: Optional[str] = None     # "position_ocr" | "stale" | etc
+    pnl_points: Optional[float] = None
+    pnl_usd: Optional[float] = None
+
     # guards / calibration
     anchor_ok: bool = True
     anchor_similarity: float = 0.0

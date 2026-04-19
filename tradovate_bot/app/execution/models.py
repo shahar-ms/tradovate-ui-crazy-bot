@@ -26,6 +26,9 @@ class ExecutionIntent(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+FillPriceSourceT = Literal["position_ocr", "stale", "timeout", "unavailable"]
+
+
 class ExecutionAck(BaseModel):
     intent_id: str
     action: ActionT
@@ -35,6 +38,10 @@ class ExecutionAck(BaseModel):
     screen_guard_passed: bool = True
     evidence_path: Optional[str] = None
     mode: ExecModeT = "click"
+    # verified broker fill price from OCR of the position region, when available
+    fill_price: Optional[float] = None
+    fill_price_confidence: Optional[float] = None
+    fill_price_source: Optional[FillPriceSourceT] = None
 
 
 class Hotkeys(BaseModel):

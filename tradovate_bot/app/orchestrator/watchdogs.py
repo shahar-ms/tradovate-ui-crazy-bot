@@ -51,3 +51,19 @@ def first_halt_reason(reasons: list[Optional[str]]) -> Optional[str]:
         if r:
             return r
     return None
+
+
+def position_region_watchdog(consecutive_unreadable: int,
+                             max_before_warn: int = 3) -> Optional[str]:
+    """
+    Emits a *warning string* (not a halt reason) when the position region has
+    been unreadable for `max_before_warn` consecutive polls. The supervisor
+    can surface the warning as an event; it is NOT a fail-stop — this region
+    is only used for verified fill-price OCR.
+    """
+    if consecutive_unreadable >= max_before_warn:
+        return (f"position_region_unreadable:{consecutive_unreadable} — "
+                "verified fill-price will be unavailable until Tradovate is "
+                "repositioned or the region is re-calibrated.")
+    return None
+

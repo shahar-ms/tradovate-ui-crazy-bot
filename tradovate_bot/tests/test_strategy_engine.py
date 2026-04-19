@@ -157,6 +157,82 @@ def test_engine_cancel_all_before_entry_flag():
         assert "CANCEL_ALL" not in actions[:sell_idx]
 
 
+def test_manual_intent_buy_from_flat_emits_entry():
+    cfg = _in_session_cfg()
+    eng, intents = _engine(cfg)
+    # seed a last accepted price (normally set by on_tick)
+    eng._last_accepted_price = 100.0
+
+    ok, msg = eng.submit_manual_intent("BUY", reason="hud")
+    assert ok
+    actions = [i.action for i in intents]
+    assert "BUY" in actions
+    # with cancel_all_before_new_entry=True by default, CANCEL_ALL should precede BUY
+    buy_idx = actions.index("BUY")
+    assert "CANCEL_ALL" in actions[:buy_idx]
+    assert eng.state.state == "PENDING_ENTRY"
+
+
+def test_manual_intent_rejected_when_in_position():
+    cfg = _in_session_cfg()
+    eng, _ = _engine(cfg)
+    eng._last_accepted_price = 100.0
+    # put into long manually
+    eng.state.to_pending_entry("BUY", 100.0, 95.0, 110.0)
+    eng.state.confirm_entry(100.0)
+
+    ok, msg = eng.submit_manual_intent("BUY", reason="hud_double")
+    assert not ok
+    assert "position active" in msg.lower()
+
+
+def test_manual_intent_rejected_when_halted():
+    cfg = _in_session_cfg()
+    eng, _ = _engine(cfg)
+    eng._last_accepted_price = 100.0
+    eng.halt("test_halt")
+    ok, msg = eng.submit_manual_intent("BUY", reason="hud")
+    assert not ok
+    assert msg == "halted"
+
+
+def test_manual_intent_rejected_when_price_stream_not_ok():
+    cfg = _in_session_cfg()
+    eng, _ = _engine(cfg)
+    eng._last_accepted_price = 100.0
+    eng.set_price_stream_ok(False)
+    ok, msg = eng.submit_manual_intent("BUY", reason="hud")
+    assert not ok
+    assert "price stream" in msg.lower()
+
+
+def test_manual_cancel_all_always_emits_when_not_halted():
+    cfg = _in_session_cfg()
+    eng, intents = _engine(cfg)
+    eng._last_accepted_price = 100.0
+    ok, _ = eng.submit_manual_intent("CANCEL_ALL", reason="hud_cancel")
+    assert ok
+    assert any(i.action == "CANCEL_ALL" for i in intents)
+
+
+def test_manual_exit_long_only_when_long():
+    cfg = _in_session_cfg()
+    eng, intents = _engine(cfg)
+    eng._last_accepted_price = 100.0
+
+    # from FLAT: reject
+    ok, msg = eng.submit_manual_intent("EXIT_LONG", reason="hud_exit")
+    assert not ok
+
+    # transition into LONG
+    eng.state.to_pending_entry("BUY", 100.0, 95.0, 110.0)
+    eng.state.confirm_entry(100.0)
+
+    ok, _ = eng.submit_manual_intent("EXIT_LONG", reason="hud_exit")
+    assert ok
+    assert any(i.action == "EXIT_LONG" for i in intents)
+
+
 def test_engine_no_double_entry_while_in_position():
     cfg = _in_session_cfg()
     eng, intents = _engine(cfg)

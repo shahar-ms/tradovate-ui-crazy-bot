@@ -27,6 +27,7 @@ from app.orchestrator.bootstrap import BootstrapError, bootstrap
 from app.orchestrator.runtime_models import RuntimeState
 from app.orchestrator.supervisor import Supervisor, SupervisorDeps
 from app.strategy.models import SignalIntent
+from app.strategy.pnl import compute_pnl
 from app.utils.time_utils import now_ms
 
 from .app_signals import AppSignals, emit_event
@@ -167,6 +168,40 @@ class UiController(QObject):
         self._supervisor.submit_command("cancel_all")
         emit_event(self.signals, "warn", "controller", "cancel_all requested")
 
+    def submit_manual(self, action: str) -> tuple[bool, str]:
+        """
+        Route a HUD-originated click through the strategy engine. Returns
+        (accepted, message). On rejection, emits `manual_rejected(message)`
+        so the HUD can show a short toast.
+        """
+        if self._supervisor is None:
+            msg = "bot not running"
+            self.signals.manual_rejected.emit(msg)
+            return False, msg
+        engine = self._supervisor.deps.engine
+        try:
+            ok, msg = engine.submit_manual_intent(action)  # type: ignore[arg-type]
+        except Exception as e:
+            log.exception("submit_manual_intent raised")
+            ok, msg = False, f"engine error: {e}"
+        if ok:
+            emit_event(self.signals, "info", "controller", f"manual {action}: {msg}")
+        else:
+            emit_event(self.signals, "warn", "controller", f"manual {action} rejected: {msg}")
+            self.signals.manual_rejected.emit(msg)
+        return ok, msg
+
+    def reload_executor_screen_map(self, new_map) -> None:
+        """Called by the HUD after a Setup/calibration save."""
+        if self._supervisor is None:
+            return
+        try:
+            self._supervisor.deps.executor.reload_screen_map(new_map)
+            emit_event(self.signals, "info", "controller", "executor screen_map reloaded")
+        except Exception as e:
+            log.exception("executor.reload_screen_map raised")
+            emit_event(self.signals, "error", "controller", f"reload failed: {e}")
+
     def switch_mode(self, mode: str) -> Optional[str]:
         """Switch mode by restarting the supervisor in the new mode."""
         if mode not in ("PRICE_DEBUG", "PAPER", "ARMED"):
@@ -270,6 +305,20 @@ class UiController(QObject):
         self.state.entry_price = pos.entry_price
         self.state.stop_price = pos.stop_price
         self.state.target_price = pos.target_price
+
+        # verified broker fill + PnL
+        self.state.fill_price = rs.last_fill_price
+        self.state.fill_price_source = rs.last_fill_price_source
+        # Only compute PnL when we have a *verified* broker fill price.
+        # When fill_price is None (ack succeeded but OCR couldn't verify), show "—".
+        if self.state.fill_price is not None and self.state.last_price is not None \
+                and side in ("long", "short"):
+            pts, usd = compute_pnl(self.state.fill_price, self.state.last_price, side)
+            self.state.pnl_points = pts
+            self.state.pnl_usd = usd
+        else:
+            self.state.pnl_points = None
+            self.state.pnl_usd = None
 
         # execution
         self.state.last_ack_status = rs.last_ack_status

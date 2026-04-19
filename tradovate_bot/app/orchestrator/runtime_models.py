@@ -34,6 +34,9 @@ class RuntimeState(BaseModel):
     current_position_side: Literal["flat", "long", "short"] = "flat"
     last_intent_action: Optional[str] = None
     last_ack_status: Optional[str] = None
+    # verified broker fill (from AckReader OCR of the position region)
+    last_fill_price: Optional[float] = None
+    last_fill_price_source: Optional[str] = None
 
 
 class RuntimeCommand(BaseModel):

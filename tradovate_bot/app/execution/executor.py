@@ -167,7 +167,38 @@ class Executor:
             screen_guard_passed=True,
             evidence_path=evidence_path,
             mode=mode,
+            fill_price=signal.fill_price,
+            fill_price_confidence=signal.fill_price_confidence,
+            fill_price_source=signal.fill_price_source,
         )
+
+    def reload_screen_map(self, new_map: ScreenMap) -> None:
+        """
+        Swap in a freshly-saved ScreenMap (e.g. after the operator re-calibrates
+        from the HUD's Setup dialog). Rebuilds the ScreenGuard and AckReader so
+        they see the new regions + anchor reference.
+        """
+        with self._lock:
+            self.screen_map = new_map
+            # rebuild guard + ack reader; close old shared capture first
+            if self._shared_capture is not None:
+                try:
+                    self._shared_capture.close()
+                except Exception:
+                    pass
+                self._shared_capture = ScreenCapture(new_map.monitor_index)
+            self.guard = ScreenGuard(
+                screen_map=new_map,
+                anchor_threshold=self.config.anchor_match_threshold,
+                capture=self._shared_capture,
+            )
+            self.ack_reader = AckReader(
+                screen_map=new_map,
+                capture=self._shared_capture,
+            )
+            log.info("executor: screen_map reloaded (%dx%d, monitor=%d)",
+                     new_map.screen_width, new_map.screen_height,
+                     new_map.monitor_index)
 
     def _failed(self, intent: ExecutionIntent, mode, reason: str) -> ExecutionAck:
         return ExecutionAck(

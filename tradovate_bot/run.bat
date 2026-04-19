@@ -15,74 +15,27 @@ if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
 :menu
 cls
 echo =====================================================
-echo   Tradovate UI crazy bot
+echo   Tradovate bot
 echo =====================================================
-echo   1. Launch UI         (PySide6 control panel)
-echo   2. Calibrate (CLI)   (OpenCV calibrator)
-echo   3. Validate          (check calibration)
-echo   4. Price debug       (live price stream, no trading)
-echo   5. Paper mode        (strategy on, clicks OFF)
-echo   6. ARMED mode        (live clicks -- requires confirm)
-echo   7. Replay synthetic  (300 synth ticks through engine)
-echo   8. Overlay preview   (draw calibrated points on screen)
-echo   9. Run tests         (pytest)
+echo   1. Launch app        (floating HUD, the whole UI)
+echo   2. Replay synthetic  (300 synth ticks through engine)
+echo   3. Overlay preview   (draw calibrated points on screen)
+echo   4. Run tests         (pytest)
 echo   I. Install / upgrade Python deps
 echo   0. Exit
 echo -----------------------------------------------------
 set /p "choice=Select: "
 
 if "%choice%"=="1" goto ui
-if "%choice%"=="2" goto calibrate
-if "%choice%"=="3" goto validate
-if "%choice%"=="4" goto pricedebug
-if "%choice%"=="5" goto paper
-if "%choice%"=="6" goto armed
-if "%choice%"=="7" goto replay
-if "%choice%"=="8" goto overlay
-if "%choice%"=="9" goto tests
+if "%choice%"=="2" goto replay
+if "%choice%"=="3" goto overlay
+if "%choice%"=="4" goto tests
 if /I "%choice%"=="I" goto deps
 if "%choice%"=="0" goto end
 goto menu
 
 :ui
 "%PY%" -m app.ui.run_ui
-goto menu
-
-:calibrate
-"%PY%" -m app.calibration.calibrator
-pause
-goto menu
-
-:validate
-"%PY%" -m app.calibration.validator
-pause
-goto menu
-
-:pricedebug
-"%PY%" -m app.orchestrator.runbot --mode PRICE_DEBUG
-pause
-goto menu
-
-:paper
-"%PY%" -m app.orchestrator.runbot --mode PAPER
-pause
-goto menu
-
-:armed
-echo.
-echo !!! ARMED MODE: the bot will perform REAL clicks on your screen.  !!!
-echo !!! Make sure you are on a SIM account, one contract size, and    !!!
-echo !!! you are supervising the screen. Move cursor to a corner to    !!!
-echo !!! trigger PyAutoGUI failsafe if anything goes wrong.             !!!
-echo.
-set /p "confirm=Type ARM to proceed (anything else cancels): "
-if /I not "%confirm%"=="ARM" (
-    echo cancelled.
-    pause
-    goto menu
-)
-"%PY%" -m app.orchestrator.runbot --mode ARMED
-pause
 goto menu
 
 :replay

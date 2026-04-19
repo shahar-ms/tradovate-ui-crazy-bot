@@ -273,10 +273,17 @@ class Supervisor:
     def _reconcile_ack(self, intent: SignalIntent, ack: ExecutionAck) -> None:
         if intent.action in ("BUY", "SELL"):
             if ack.status == "ok":
-                self.deps.engine.confirm_entry_filled(intent.trigger_price)
+                # Prefer the broker's verified fill price from AckReader OCR.
+                # Fall back to the pre-click trigger price only when OCR is
+                # unavailable (status="ok" but fill_price missing).
+                fill = ack.fill_price if ack.fill_price is not None else intent.trigger_price
+                self.deps.engine.confirm_entry_filled(fill)
                 self.state.current_position_side = (
                     "long" if intent.action == "BUY" else "short"
                 )
+                # stash for the UI
+                self.state.last_fill_price = ack.fill_price
+                self.state.last_fill_price_source = ack.fill_price_source
             elif ack.status == "failed" or ack.status == "blocked":
                 self.deps.engine.reject_entry(f"{ack.status}:{ack.message}")
             elif ack.status == "unknown":
@@ -286,9 +293,16 @@ class Supervisor:
             if ack.status == "ok":
                 self.deps.engine.confirm_exit_filled(realized_pnl_points=None)
                 self.state.current_position_side = "flat"
+                # clear verified fill on exit — no open position to track
+                self.state.last_fill_price = None
+                self.state.last_fill_price_source = None
             elif ack.status == "unknown":
                 self._halt(f"unknown_ack_on_exit:{ack.message}")
-        # CANCEL_ALL: no state change required
+        elif intent.action == "CANCEL_ALL":
+            if ack.status == "ok":
+                # Tradovate cleared the position — clear our tracking too
+                self.state.last_fill_price = None
+                self.state.last_fill_price_source = None
 
     def _to_execution_intent(self, intent: SignalIntent) -> Optional[ExecutionIntent]:
         a = intent.action
