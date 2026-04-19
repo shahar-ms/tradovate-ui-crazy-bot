@@ -164,6 +164,37 @@ def test_cancel_all_uses_diff_and_reports_unavailable_fill():
     assert signal.status == "ok"
 
 
+def test_screen_capture_is_thread_safe():
+    """ScreenCapture instances must be usable from multiple threads —
+    mss keeps Windows device contexts in thread-local storage and would
+    raise '_thread._local' object has no attribute 'srcdc' otherwise."""
+    import threading
+    from app.capture.screen_capture import ScreenCapture
+    from app.models.common import Region
+
+    cap = ScreenCapture(monitor_index=1)
+    region = Region(left=0, top=0, width=10, height=10)
+    errors: list[Exception] = []
+
+    def worker():
+        try:
+            cap.grab_region(region)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=3.0)
+
+    # Any srcdc error would have been caught. Other errors (no monitor on
+    # a CI box, permissions, etc.) we tolerate — the point is specifically
+    # that the thread-local srcdc bug doesn't surface.
+    assert not any("srcdc" in str(e) for e in errors), \
+        f"mss thread-local crash resurfaced: {errors}"
+
+
 def test_no_evidence_region_is_handled():
     sm = _sm(with_position=False)
     # no position_region and no status_region → read_after returns unknown
