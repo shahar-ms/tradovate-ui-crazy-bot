@@ -256,8 +256,33 @@ class DashboardPage(QWidget):
     def _start_mode(self, mode: str) -> None:
         err = self.controller.start(mode=mode, armed=False)
         if err:
-            QMessageBox.critical(self, "Start failed", err)
+            self._handle_start_failure(mode, err)
         self._refresh_buttons()
+
+    def _handle_start_failure(self, mode: str, err: str) -> None:
+        """Offer Re-calibrate / Start anyway when bootstrap rejects the start."""
+        from app.ui.dialogs.calibration_failed_dialog import CalibrationFailedDialog
+        lines = list(self.controller.last_start_report_lines)
+        if not lines:
+            QMessageBox.critical(self, "Start failed", err)
+            return
+        dlg = CalibrationFailedDialog(
+            message=self.controller.last_start_error or err,
+            report_lines=lines,
+            parent=self,
+        )
+        if not dlg.exec():
+            return
+        if dlg.choice == CalibrationFailedDialog.RECALIBRATE:
+            w = self.window()
+            if hasattr(w, "_calibration_index") and hasattr(w, "go_to"):
+                w.go_to(w._calibration_index)  # type: ignore[attr-defined]
+            return
+        if dlg.choice == CalibrationFailedDialog.START_ANYWAY:
+            err2 = self.controller.start(mode=mode, armed=False,
+                                         skip_calibration_check=True)
+            if err2:
+                QMessageBox.critical(self, "Start failed", err2)
 
     def _try_arm(self) -> None:
         from app.ui.dialogs.arm_confirm_dialog import ArmConfirmDialog

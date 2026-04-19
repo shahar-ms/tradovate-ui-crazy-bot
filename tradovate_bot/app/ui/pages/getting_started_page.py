@@ -406,11 +406,32 @@ class GettingStartedPage(QWidget):
                 "the bot — otherwise it doesn't know where to look."
             )
             return
+        self._start_mode_with_recovery("PRICE_DEBUG")
+
+    def _start_mode_with_recovery(self, mode: str) -> None:
+        """Start a mode; on bootstrap failure, offer recalibrate or skip."""
         if self.controller.is_running():
             self.controller.stop()
-        err = self.controller.start(mode="PRICE_DEBUG", armed=False)
-        if err:
-            QMessageBox.critical(self, "Start failed", err)
+        err = self.controller.start(mode=mode, armed=False)
+        if not err:
+            return
+        # bootstrap failed — build the detailed dialog
+        from app.ui.dialogs.calibration_failed_dialog import CalibrationFailedDialog
+        dlg = CalibrationFailedDialog(
+            message=self.controller.last_start_error or err,
+            report_lines=list(self.controller.last_start_report_lines),
+            parent=self,
+        )
+        if not dlg.exec():
+            return
+        if dlg.choice == CalibrationFailedDialog.RECALIBRATE:
+            self._go_calibrate()
+            return
+        if dlg.choice == CalibrationFailedDialog.START_ANYWAY:
+            err2 = self.controller.start(mode=mode, armed=False,
+                                         skip_calibration_check=True)
+            if err2:
+                QMessageBox.critical(self, "Start failed", err2)
 
     def _open_diagnose(self) -> None:
         from app.ui.dialogs.ocr_diagnose_dialog import OcrDiagnoseDialog
@@ -427,8 +448,4 @@ class GettingStartedPage(QWidget):
                 "the strategy."
             )
             return
-        if self.controller.is_running():
-            self.controller.stop()
-        err = self.controller.start(mode="PAPER", armed=False)
-        if err:
-            QMessageBox.critical(self, "Start failed", err)
+        self._start_mode_with_recovery("PAPER")

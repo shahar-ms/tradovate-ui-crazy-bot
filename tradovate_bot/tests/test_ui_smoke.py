@@ -515,6 +515,53 @@ def test_calibration_image_buttons_toggle(qtbot):
     assert page.btn_reset_image.isEnabled()
 
 
+def test_bootstrap_error_carries_report_lines():
+    from app.orchestrator.bootstrap import BootstrapError
+    e = BootstrapError("anchor_mismatch:0.5<0.9",
+                       report_lines=["[OK] screen_map.json loaded",
+                                     "[FAIL] anchor_mismatch:0.500<0.900"])
+    assert str(e) == "anchor_mismatch:0.5<0.9"
+    assert any("anchor_mismatch" in line for line in e.report_lines)
+
+
+def test_calibration_failed_dialog_choices(qtbot):
+    from app.ui.dialogs.calibration_failed_dialog import CalibrationFailedDialog
+
+    dlg = CalibrationFailedDialog(
+        message="anchor_mismatch:0.50<0.90",
+        report_lines=["[OK] config loaded", "[FAIL] anchor similarity too low"],
+    )
+    qtbot.addWidget(dlg)
+    # default exit when user dismisses: CANCEL
+    assert dlg.choice == CalibrationFailedDialog.CANCEL
+    # pick "start anyway" via the handler
+    dlg._start_anyway()
+    assert dlg.choice == CalibrationFailedDialog.START_ANYWAY
+    # pick re-calibrate
+    dlg._recalibrate()
+    assert dlg.choice == CalibrationFailedDialog.RECALIBRATE
+
+
+def test_controller_stashes_report_lines_on_bootstrap_failure(qtbot, monkeypatch):
+    """When bootstrap raises with report_lines, the controller exposes them."""
+    from app.orchestrator.bootstrap import BootstrapError
+    from app.ui import controller as controller_mod
+
+    def fake_bootstrap(*a, **kw):
+        raise BootstrapError("anchor_mismatch",
+                             report_lines=["[OK] ok", "[FAIL] anchor_mismatch"])
+
+    monkeypatch.setattr(controller_mod, "bootstrap", fake_bootstrap)
+
+    signals = AppSignals()
+    state = UiState()
+    c = UiController(signals=signals, state=state)
+    err = c.start(mode="PRICE_DEBUG")
+    assert err is not None
+    assert c.last_start_error is not None
+    assert any("anchor_mismatch" in l for l in c.last_start_report_lines)
+
+
 def test_calibration_delete_removes_saved_files(qtbot, tmp_path, monkeypatch):
     """Delete saved calibration removes files and clears editor state."""
     import cv2

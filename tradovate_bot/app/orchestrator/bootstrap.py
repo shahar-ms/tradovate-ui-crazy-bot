@@ -24,7 +24,9 @@ log = logging.getLogger(__name__)
 
 
 class BootstrapError(RuntimeError):
-    pass
+    def __init__(self, message: str, report_lines: list[str] | None = None):
+        super().__init__(message)
+        self.report_lines: list[str] = list(report_lines or [])
 
 
 @dataclass
@@ -58,7 +60,14 @@ def bootstrap(
         for line in report.lines:
             log.info(line)
         if not report.ready:
-            raise BootstrapError("calibration_invalid; run python -m app.calibration.calibrator")
+            # surface the specific failure lines so the UI can show them
+            fail_lines = [l for l in report.lines if l.startswith("[FAIL]")]
+            summary = fail_lines[0] if fail_lines else "calibration_invalid"
+            raise BootstrapError(
+                summary.replace("[FAIL]", "").strip()
+                or "calibration_invalid",
+                report_lines=list(report.lines),
+            )
     try:
         screen_map = load_screen_map(paths.screen_map_path())
     except Exception as e:

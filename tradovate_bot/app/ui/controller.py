@@ -51,6 +51,9 @@ class UiController(QObject):
         self._supervisor: Optional[Supervisor] = None
         self._started_at_ms: Optional[int] = None
         self._last_emitted_frame_id: int = -1
+        # stash last bootstrap failure so the UI can show a detailed dialog
+        self.last_start_error: Optional[str] = None
+        self.last_start_report_lines: list[str] = []
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(self.cfg.poll_interval_ms)
@@ -80,7 +83,12 @@ class UiController(QObject):
             log.error("bootstrap failed: %s", e)
             emit_event(self.signals, "error", "controller", f"bootstrap: {e}")
             self.signals.controller_state_changed.emit("error")
+            self.last_start_error = str(e)
+            self.last_start_report_lines = list(getattr(e, "report_lines", []) or [])
             return str(e)
+
+        self.last_start_error = None
+        self.last_start_report_lines = []
 
         # hook the engine emit callback to the signal bus
         br.engine._emit_cb = self._on_engine_intent  # type: ignore[attr-defined]
