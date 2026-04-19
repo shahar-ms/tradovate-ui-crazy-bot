@@ -134,13 +134,16 @@ class StrategyEngine:
                 return True, "emitted", out
 
             if action in ("BUY", "SELL"):
+                # Manual HUD intents intentionally bypass the risk manager's
+                # session-window / cooldown / max-trades gates — those are
+                # auto-strategy safeguards. Operator clicks are operator-
+                # decided. We keep only the hard safety rails: not in an
+                # existing position, price stream must be ok, and we need a
+                # real price to trade at.
                 if not self.state.is_flat():
                     return False, "position active \u2014 use Cancel All first", []
                 if not self._price_stream_ok:
                     return False, "price stream not ok", []
-                decision = self.risk.can_enter(self._now_utc(), self._price_stream_ok)
-                if not decision.can_enter:
-                    return False, decision.reason or "risk blocked", []
                 if price is None:
                     return False, "no price yet", []
                 out.extend(self._initiate_entry(action, trigger_price=price, reason=reason))

@@ -139,37 +139,48 @@ def test_hud_button_rules(qtbot):
     assert not hud._halt_btn.isEnabled()
     assert hud._setup_btn.isEnabled()
 
-    # running + flat + not halted + not armed + calibrated → BUY/SELL/CANCEL/ARM/HALT on
+    # running + flat + not halted + not armed + calibrated:
+    # BUY/SELL/CANCEL are DISABLED (armed=False means clicks would be dry-run)
+    # ARM/HALT are enabled
     ctrl.is_running_val = True
     state.position_side = "flat"
     state.halted = False
     state.armed = False
     state.calibration_loaded = True
     hud._refresh_all()
-    assert hud._buy_btn.isEnabled()
-    assert hud._sell_btn.isEnabled()
-    assert hud._cancel_btn.isEnabled()
+    assert not hud._buy_btn.isEnabled()
+    assert not hud._sell_btn.isEnabled()
+    assert not hud._cancel_btn.isEnabled()
     assert hud._arm_btn.isEnabled()
     assert not hud._disarm_btn.isEnabled()
     assert hud._halt_btn.isEnabled()
 
-    # in a position → BUY/SELL disabled
+    # once armed, BUY/SELL/CANCEL come online (clicks now reach Tradovate)
+    state.armed = True
+    hud._refresh_all()
+    assert hud._buy_btn.isEnabled()
+    assert hud._sell_btn.isEnabled()
+    assert hud._cancel_btn.isEnabled()
+
+    # in a position → BUY/SELL disabled, CANCEL still available
     state.position_side = "long"
     hud._refresh_all()
     assert not hud._buy_btn.isEnabled()
     assert not hud._sell_btn.isEnabled()
     assert hud._cancel_btn.isEnabled()
 
-    # halted → arm disabled
+    # halted → arm + cancel disabled
     state.halted = True
     hud._refresh_all()
     assert not hud._arm_btn.isEnabled()
+    assert not hud._cancel_btn.isEnabled()
 
 
 def test_buy_button_routes_through_controller(qtbot):
     hud, ctrl, state = _build_hud(qtbot)
     ctrl.is_running_val = True
     state.calibration_loaded = True
+    state.armed = True   # buttons only clickable when armed
     hud._refresh_all()
     hud._buy_btn.click()
     assert ctrl.manual_calls == ["BUY"]
@@ -200,7 +211,7 @@ def test_hud_shows_paused_banner_and_disables_entry_buttons(qtbot):
     ctrl.is_running_val = True
     state.mode = "PAPER"
     state.calibration_loaded = True
-    state.armed = False
+    state.armed = True   # need armed so CANCEL would be clickable without pause
     state.halted = False
     state.paused = True
     state.pause_reason = "anchor_drift"
@@ -216,7 +227,7 @@ def test_hud_shows_paused_banner_and_disables_entry_buttons(qtbot):
     assert not hud._buy_btn.isEnabled()
     assert not hud._sell_btn.isEnabled()
     assert not hud._arm_btn.isEnabled()
-    # CANCEL ALL and HALT still available even when paused
+    # CANCEL ALL and HALT still available while paused (safety actions)
     assert hud._cancel_btn.isEnabled()
     assert hud._halt_btn.isEnabled()
 

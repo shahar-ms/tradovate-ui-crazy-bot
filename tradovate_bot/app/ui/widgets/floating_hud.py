@@ -532,11 +532,26 @@ class FloatingHud(QWidget):
         paused = s.paused
         armed = s.armed
 
-        # Entry buttons: require running + flat + not halted + not paused
-        self._buy_btn.setEnabled(running and flat and not halted and not paused)
-        self._sell_btn.setEnabled(running and flat and not halted and not paused)
-        # CANCEL ALL still works while paused (it's a safety action)
-        self._cancel_btn.setEnabled(running and not halted)
+        # Entry buttons: require running + armed (else clicks are dry-run and
+        # never reach Tradovate) + flat + not halted + not paused.
+        # Hint when disabled so the operator knows why.
+        entry_ok = running and armed and flat and not halted and not paused
+        self._buy_btn.setEnabled(entry_ok)
+        self._sell_btn.setEnabled(entry_ok)
+        if not armed:
+            self._buy_btn.setToolTip("Enable Bot first — clicks only reach Tradovate when armed.")
+            self._sell_btn.setToolTip("Enable Bot first — clicks only reach Tradovate when armed.")
+        else:
+            self._buy_btn.setToolTip("")
+            self._sell_btn.setToolTip("")
+        # CANCEL ALL is a safety action but also needs armed to click live.
+        self._cancel_btn.setEnabled(running and armed and not halted)
+        if not armed:
+            self._cancel_btn.setToolTip(
+                "Enable Bot first — CANCEL ALL needs armed execution to reach Tradovate."
+            )
+        else:
+            self._cancel_btn.setToolTip("")
         # ARM requires calibration + not paused + not halted + not already armed
         self._arm_btn.setEnabled(
             running and not armed and not halted and not paused and s.calibration_loaded
