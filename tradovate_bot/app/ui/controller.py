@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class ControllerConfig:
-    poll_interval_ms: int = 250
+    poll_interval_ms: int = 80   # how fast the HUD sees supervisor state changes
 
 
 class UiController(QObject):

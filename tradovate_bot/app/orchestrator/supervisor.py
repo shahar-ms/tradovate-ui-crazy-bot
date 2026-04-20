@@ -228,9 +228,12 @@ class Supervisor:
                 log.warning("price queue full (dropped tick)")
 
     def _strategy_loop(self) -> None:
+        # Short queue timeout keeps UI-visible latency low. A fresh tick can
+        # sit in the queue at most this long before we process it, so this
+        # becomes the lower bound on end-to-end price-to-HUD latency.
         while not self._stop.is_set():
             try:
-                tick = self.bus.price_queue.get(timeout=0.2)
+                tick = self.bus.price_queue.get(timeout=0.05)
             except queue.Empty:
                 continue
 
@@ -261,7 +264,7 @@ class Supervisor:
     def _executor_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                intent = self.bus.intent_queue.get(timeout=0.2)
+                intent = self.bus.intent_queue.get(timeout=0.05)
             except queue.Empty:
                 continue
 
