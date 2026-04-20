@@ -154,6 +154,82 @@ def test_accepted_ticks_drain():
     assert all(t.accepted for t in ticks)
 
 
+def test_identical_frame_is_deduped_without_rerunning_ocr():
+    """When the raw crop is byte-identical to the previous frame, OCR is
+    skipped and the previous tick is reused — this is the dominant fast
+    path at high capture rates."""
+    recipes = ["gray_only"]
+    reader = PerRecipeReader({"gray_only": ("19234.25", 90.0)})
+    cfg = _cfg(recipes)
+    stream = PriceStream(
+        region=Region(left=0, top=0, width=10, height=10),
+        monitor_index=1,
+        bot_cfg=cfg,
+        reader=reader,
+    )
+    img = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    r1 = stream.process_image(img)
+    r2 = stream.process_image(img)  # identical → should dedup
+    r3 = stream.process_image(img)  # identical → should dedup
+
+    assert r1.tick.accepted
+    assert r2.tick.accepted
+    assert r3.tick.accepted
+    # Same price surfaced on all three
+    assert r1.tick.price == r2.tick.price == r3.tick.price == 19234.25
+    # Two of the three processed frames were served from the dedup cache
+    assert stream.total_deduped_count == 2
+    # The reader was called exactly once (for the first frame only)
+    assert reader._i == 1
+
+
+def test_different_frame_bypasses_dedup():
+    """A byte-different frame must fall through the dedup and run OCR."""
+    recipes = ["gray_only"]
+    reader = ScriptedReader([("19234.25", 90.0), ("19234.50", 90.0)])
+    cfg = _cfg(recipes)
+    stream = PriceStream(
+        region=Region(left=0, top=0, width=10, height=10),
+        monitor_index=1,
+        bot_cfg=cfg,
+        reader=reader,
+    )
+    img_a = np.zeros((10, 10, 3), dtype=np.uint8)
+    img_b = np.full((10, 10, 3), 7, dtype=np.uint8)  # different pixels
+
+    r1 = stream.process_image(img_a)
+    r2 = stream.process_image(img_b)
+
+    assert r1.tick.price == 19234.25
+    assert r2.tick.price == 19234.50
+    assert stream.total_deduped_count == 0
+
+
+def test_parallel_ocr_still_produces_correct_vote():
+    """Using the internal ThreadPoolExecutor must not change semantics —
+    three recipes agreeing still produce an accepted tick with the
+    highest-confidence recipe winning."""
+    recipes = ["gray_only", "otsu_threshold", "scaled_2x_otsu"]
+    reader = PerRecipeReader({
+        "gray_only":       ("19234.25", 85.0),
+        "otsu_threshold":  ("19234.25", 92.0),
+        "scaled_2x_otsu":  ("19234.25", 88.0),
+    })
+    cfg = _cfg(recipes)
+    stream = PriceStream(
+        region=Region(left=0, top=0, width=10, height=10),
+        monitor_index=1,
+        bot_cfg=cfg,
+        reader=reader,
+    )
+    img = np.zeros((10, 10, 3), dtype=np.uint8)
+    r = stream.process_image(img)
+    assert r.tick.accepted
+    assert r.tick.price == 19234.25
+    assert r.tick.confidence == 92.0
+
+
 def test_jump_rejection_after_accepted_price():
     recipes = ["gray_only"]
     # First image produces 19234.25, second produces an unreasonable 19500.00
@@ -167,9 +243,12 @@ def test_jump_rejection_after_accepted_price():
         bot_cfg=cfg,
         reader=reader,
     )
-    img = np.zeros((10, 10, 3), dtype=np.uint8)
-    r1 = stream.process_image(img)
-    r2 = stream.process_image(img)
+    # Two pixel-distinct images so the new frame-dedup fast path doesn't
+    # short-circuit OCR on the second frame.
+    img_a = np.zeros((10, 10, 3), dtype=np.uint8)
+    img_b = np.full((10, 10, 3), 7, dtype=np.uint8)
+    r1 = stream.process_image(img_a)
+    r2 = stream.process_image(img_b)
     assert r1.tick.accepted
     assert not r2.tick.accepted
     assert "jump_too_large" in (r2.tick.reject_reason or "")

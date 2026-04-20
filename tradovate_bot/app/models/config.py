@@ -10,7 +10,7 @@ from .common import ScreenMap
 
 
 class BotConfig(BaseModel):
-    capture_fps_target: int = Field(8, ge=1, le=60)
+    capture_fps_target: int = Field(15, ge=1, le=60)
     ocr_backend: Literal["tesseract"] = "tesseract"
     min_ocr_confidence: float = Field(70.0, ge=0.0, le=100.0)
     price_stale_ms: int = Field(1500, gt=0)

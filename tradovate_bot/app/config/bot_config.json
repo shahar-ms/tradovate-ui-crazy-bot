@@ -1,5 +1,5 @@
 {
-  "capture_fps_target": 8,
+  "capture_fps_target": 15,
   "ocr_backend": "tesseract",
   "min_ocr_confidence": 70.0,
   "price_stale_ms": 1500,

@@ -6,10 +6,12 @@ Price stream loop. Captures the price region repeatedly, runs preprocessing
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -87,6 +89,22 @@ class PriceStream:
         self.last_raw_text: str = ""
         self.last_reject_reason: Optional[str] = None
 
+        # Frame-dedup cache — OCR is the expensive part. If the raw crop is
+        # byte-identical to the previous frame, reuse the previous tick (just
+        # update timestamp + frame_id). Common when prices are static between
+        # actual updates (prices update ~1/sec, we sample much faster).
+        self._last_frame_hash: Optional[bytes] = None
+        self.total_deduped_count: int = 0
+
+        # Parallel OCR across preprocess recipes. Tesseract runs a subprocess
+        # per call, so the calls are IO-bound; a small thread pool collapses
+        # the sum of their latencies into roughly the slowest single one.
+        n_workers = max(1, len(bot_cfg.preprocess_recipes))
+        self._ocr_pool = ThreadPoolExecutor(
+            max_workers=min(n_workers, 4),
+            thread_name_prefix="ocr",
+        )
+
     # --- thread control --- #
 
     def start(self) -> None:
@@ -100,6 +118,10 @@ class PriceStream:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=timeout)
+        try:
+            self._ocr_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
     # --- consumers --- #
 
@@ -124,6 +146,46 @@ class PriceStream:
     def process_image(self, img: np.ndarray, frame_id: Optional[int] = None,
                       source_path: Optional[str] = None) -> OneFrameResult:
         fid = frame_id if frame_id is not None else self._next_frame_id()
+
+        # ---------- frame-dedup fast path ---------- #
+        # If the raw crop pixels are byte-identical to the previous frame,
+        # reuse the previous tick — OCR is the expensive part and the result
+        # won't have changed. Keeps the published stream "alive" at the
+        # capture cadence without paying OCR cost on every tick.
+        crop_hash = hashlib.blake2b(img.tobytes(), digest_size=16).digest()
+        if crop_hash == self._last_frame_hash and self._latest_tick is not None:
+            self.total_deduped_count += 1
+            prev = self._latest_tick
+            dup = prev.model_copy(update={
+                "ts_ms": now_ms(),
+                "frame_id": fid,
+                "source_image_path": source_path,
+            })
+            if dup.accepted:
+                self.health.on_success(dup.price)  # type: ignore[arg-type]
+                self.total_accepted_count += 1
+            else:
+                # no need to re-count a rejection we already counted
+                pass
+            with self._lock:
+                self._latest_tick = dup
+            if dup.accepted:
+                try:
+                    self._accepted_queue.put_nowait(dup)
+                except queue.Full:
+                    try:
+                        self._accepted_queue.get_nowait()
+                        self._accepted_queue.put_nowait(dup)
+                    except queue.Empty:
+                        pass
+            if self.on_tick:
+                try:
+                    self.on_tick(dup)
+                except Exception:
+                    log.exception("on_tick callback raised")
+            return OneFrameResult(tick=dup, candidates=[])
+        self._last_frame_hash = crop_hash
+
         variants = preprocess.make_variants(img, self.cfg.preprocess_recipes)
 
         prev = self.health.state.last_accepted_price
@@ -132,8 +194,19 @@ class PriceStream:
         best_failed_conf = 0.0
         failed_reasons: list[str] = []
 
-        for recipe_name, variant_img in variants.items():
-            ocr = self.reader.read(variant_img)
+        # ---------- parallel OCR across recipes ---------- #
+        # Tesseract runs a subprocess per call, so the calls are IO-bound.
+        # Dispatching them to a small thread pool collapses the sum of
+        # their latencies into ~the slowest single one.
+        recipe_names = list(variants.keys())
+        variant_imgs = [variants[n] for n in recipe_names]
+        if len(recipe_names) == 1:
+            ocr_results = [self.reader.read(variant_imgs[0])]
+        else:
+            futures = [self._ocr_pool.submit(self.reader.read, v) for v in variant_imgs]
+            ocr_results = [f.result() for f in futures]
+
+        for recipe_name, ocr in zip(recipe_names, ocr_results):
             if ocr.raw_text and ocr.confidence > best_failed_conf:
                 best_failed_raw = ocr.raw_text
                 best_failed_conf = ocr.confidence
