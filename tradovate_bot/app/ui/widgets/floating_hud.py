@@ -47,8 +47,8 @@ log = logging.getLogger(__name__)
 
 HUD_WIDTH = 330
 HUD_HEIGHT = 440
-HUD_COMPACT_WIDTH = 210
-HUD_COMPACT_HEIGHT = 38
+HUD_COMPACT_WIDTH = 320
+HUD_COMPACT_HEIGHT = 46
 HUD_LEFT_MARGIN = 20
 # Fraction of the available screen height at which the HUD's TOP edge
 # is anchored by default. The HUD extends downward from there. 0.35
@@ -283,7 +283,7 @@ class FloatingHud(QWidget):
 
         self._compact_dot = QLabel("●")
         self._compact_dot.setStyleSheet(
-            f"color: {INACTIVE_GRAY}; font-size: 16px;"
+            f"color: {INACTIVE_GRAY}; font-size: 18px;"
         )
         root.addWidget(self._compact_dot)
 
@@ -294,8 +294,11 @@ class FloatingHud(QWidget):
         root.addWidget(self._compact_mode)
 
         self._compact_price = QLabel("—")
-        self._compact_price.setStyleSheet("font-size: 14px; font-weight: 700;")
+        self._compact_price.setStyleSheet("font-size: 18px; font-weight: 700;")
         self._compact_price.setAlignment(Qt.AlignCenter)
+        # guarantee room for the full price string (e.g. "26680.00" + wider
+        # digits) so it's never truncated when the window is fixed-sized.
+        self._compact_price.setMinimumWidth(110)
         root.addWidget(self._compact_price, 1)
 
         self._compact_pos = QLabel("flat")
@@ -304,7 +307,7 @@ class FloatingHud(QWidget):
 
         self._expand_btn = QLabel("⛶")
         self._expand_btn.setStyleSheet(
-            f"color: {TEXT_MUTED}; font-size: 14px; font-weight: 700; padding: 0 4px;"
+            f"color: {TEXT_MUTED}; font-size: 16px; font-weight: 700; padding: 0 4px;"
         )
         self._expand_btn.setToolTip("Expand HUD")
         self._expand_btn.mousePressEvent = lambda e: self._set_minimized(False)  # type: ignore[assignment]
