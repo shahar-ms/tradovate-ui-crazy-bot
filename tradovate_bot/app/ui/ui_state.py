@@ -35,6 +35,13 @@ class UiState:
     rejected_tick_count: int = 0
     last_reject_reason: Optional[str] = None
     last_raw_text: str = ""
+    # Wall-clock ms for the last real OCR pass (dedup hits don't update this).
+    last_ocr_ms: float = 0.0
+    # End-to-end client-side time per frame: capture + dedup check + OCR (if
+    # it ran) + publish. Refreshed every frame, including dedup hits.
+    last_frame_ms: float = 0.0
+    # Frames served from the dedup cache (OCR skipped).
+    total_deduped_count: int = 0
 
     # strategy
     position_side: str = "flat"

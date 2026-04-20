@@ -206,6 +206,31 @@ def test_different_frame_bypasses_dedup():
     assert stream.total_deduped_count == 0
 
 
+def test_last_ocr_ms_populated_on_real_ocr_but_not_on_dedup():
+    """The debug timer that feeds the HUD: last_ocr_ms reflects the last
+    OCR pass. Dedup hits must NOT overwrite it (operator wants to know the
+    OCR cost of the CURRENT number, not the trivial hash-check cost)."""
+    recipes = ["gray_only"]
+    reader = PerRecipeReader({"gray_only": ("19234.25", 90.0)})
+    cfg = _cfg(recipes)
+    stream = PriceStream(
+        region=Region(left=0, top=0, width=10, height=10),
+        monitor_index=1,
+        bot_cfg=cfg,
+        reader=reader,
+    )
+    img = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    # first frame: real OCR runs, timer should be populated
+    stream.process_image(img)
+    after_real = stream.last_ocr_ms
+    assert after_real >= 0
+
+    # second frame: identical, dedup path, last_ocr_ms must not change
+    stream.process_image(img)
+    assert stream.last_ocr_ms == after_real
+
+
 def test_parallel_ocr_still_produces_correct_vote():
     """Using the internal ThreadPoolExecutor must not change semantics —
     three recipes agreeing still produce an accepted tick with the

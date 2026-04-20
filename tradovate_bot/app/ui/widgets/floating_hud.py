@@ -155,7 +155,7 @@ class FloatingHud(QWidget):
         self._price_lbl.setStyleSheet("font-size: 30px; font-weight: 700;")
         root.addWidget(self._price_lbl)
 
-        # row 3: health + confidence
+        # row 3: health + confidence + per-frame timing (end-to-end)
         row3 = QHBoxLayout()
         self._health_lbl = QLabel("health: inactive")
         self._health_lbl.setStyleSheet("font-size: 10px;")
@@ -164,6 +164,14 @@ class FloatingHud(QWidget):
         self._conf_lbl = QLabel("conf: —")
         self._conf_lbl.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED};")
         row3.addWidget(self._conf_lbl)
+        self._frame_ms_lbl = QLabel("— ms")
+        self._frame_ms_lbl.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED};")
+        self._frame_ms_lbl.setToolTip(
+            "End-to-end client latency: time from grabbing the price region "
+            "to the new tick being available. Includes screen capture + "
+            "dedup check + OCR (when needed) + publish."
+        )
+        row3.addWidget(self._frame_ms_lbl)
         root.addLayout(row3)
 
         # separator
@@ -469,6 +477,24 @@ class FloatingHud(QWidget):
         )
         self._conf_lbl.setText(f"conf: {s.last_confidence:.0f}"
                                if s.last_confidence else "conf: —")
+
+        # per-frame end-to-end latency. Color-code: green under 60ms, yellow
+        # 60-150ms, red above 150ms — roughly matches human-noticeable tiers.
+        if s.last_frame_ms > 0:
+            ms = s.last_frame_ms
+            if ms < 60:
+                ms_color = OK_GREEN
+            elif ms < 150:
+                ms_color = DEGRADED_YELLOW
+            else:
+                ms_color = BROKEN_RED
+            self._frame_ms_lbl.setText(f"{ms:.0f} ms")
+            self._frame_ms_lbl.setStyleSheet(
+                f"font-size: 10px; color: {ms_color}; font-weight: 600;"
+            )
+        else:
+            self._frame_ms_lbl.setText("— ms")
+            self._frame_ms_lbl.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED};")
 
         # position
         if s.position_side == "flat":

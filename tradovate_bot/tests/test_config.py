@@ -74,7 +74,9 @@ def test_default_bot_config_loads():
     assert isinstance(cfg, BotConfig)
     assert cfg.capture_fps_target >= 1
     assert 0.0 <= cfg.anchor_match_threshold <= 1.0
-    assert "gray_only" in cfg.preprocess_recipes
+    assert len(cfg.preprocess_recipes) >= 1
+    # Default ships with a single fast recipe; the rest are opt-in via config.
+    assert "otsu_threshold" in cfg.preprocess_recipes
 
 
 def test_default_strategy_config_loads():

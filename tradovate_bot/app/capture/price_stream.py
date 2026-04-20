@@ -96,6 +96,16 @@ class PriceStream:
         self._last_frame_hash: Optional[bytes] = None
         self.total_deduped_count: int = 0
 
+        # Debug: wall-clock ms spent on the last frame that actually ran OCR.
+        # Not reset on dedup hits (the user wants "how long does it take to
+        # OCR this price region", not "how long did the hash check take").
+        self.last_ocr_ms: float = 0.0
+        # Debug: full end-to-end per-frame time measured on the client side
+        # — from the moment we grab the crop to the moment the PriceTick is
+        # published and available to the UI. Includes capture + dedup check +
+        # OCR (if it ran) + validate + publish. Refreshed every frame.
+        self.last_frame_ms: float = 0.0
+
         # Parallel OCR across preprocess recipes. Tesseract runs a subprocess
         # per call, so the calls are IO-bound; a small thread pool collapses
         # the sum of their latencies into roughly the slowest single one.
@@ -186,6 +196,11 @@ class PriceStream:
             return OneFrameResult(tick=dup, candidates=[])
         self._last_frame_hash = crop_hash
 
+        # Measure wall-clock from this point through the OCR + vote phase.
+        # Preprocessing is included because it's part of the per-frame
+        # "what does this pixel crop say" cost the operator cares about.
+        t_start = time.time()
+
         variants = preprocess.make_variants(img, self.cfg.preprocess_recipes)
 
         prev = self.health.state.last_accepted_price
@@ -227,6 +242,9 @@ class PriceStream:
                 failed_reasons.append(verdict.reason or "rejected")
 
         result = vote(candidates)
+
+        # stash the wall-clock cost of this real OCR pass for the HUD
+        self.last_ocr_ms = (time.time() - t_start) * 1000.0
 
         if result.accepted and result.price is not None:
             self.health.on_success(result.price)
@@ -328,6 +346,11 @@ class PriceStream:
 
                     fid = self._next_frame_id()
                     self.process_image(img, frame_id=fid)
+                    # End-to-end per-frame time: what the operator sees as the
+                    # delay between "price changed on screen" and "HUD shows
+                    # the new number". Captured right after the tick is
+                    # published so it reflects the full client-side pipeline.
+                    self.last_frame_ms = (time.time() - loop_start) * 1000.0
                     self.health.tick_for_staleness()
 
                     self._maybe_save_debug(img, fid)

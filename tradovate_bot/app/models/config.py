@@ -22,13 +22,12 @@ class BotConfig(BaseModel):
     save_debug_images: bool = True
     debug_image_interval_sec: int = Field(10, ge=1)
     max_jump_points: float = Field(30.0, gt=0.0)
+    # Fewer recipes = faster OCR. One recipe is usually enough for a clean
+    # price region (Tradovate's DOM price is high contrast). Add more
+    # recipes back (gray_only, scaled_2x_otsu, scaled_3x_binary_close) via
+    # bot_config.json if the single-recipe path starts rejecting ticks.
     preprocess_recipes: list[str] = Field(
-        default_factory=lambda: [
-            "gray_only",
-            "otsu_threshold",
-            "scaled_2x_otsu",
-            "scaled_3x_binary_close",
-        ]
+        default_factory=lambda: ["otsu_threshold"]
     )
 
 

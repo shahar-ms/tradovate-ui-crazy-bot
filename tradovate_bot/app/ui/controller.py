@@ -354,6 +354,9 @@ class UiController(QObject):
             self.state.rejected_tick_count = sup._price_stream.total_rejected_count
             self.state.last_raw_text = sup._price_stream.last_raw_text
             self.state.last_reject_reason = sup._price_stream.last_reject_reason
+            self.state.last_ocr_ms = sup._price_stream.last_ocr_ms
+            self.state.last_frame_ms = sup._price_stream.last_frame_ms
+            self.state.total_deduped_count = sup._price_stream.total_deduped_count
 
         latest = sup._price_stream.get_latest_tick() if sup._price_stream else None
         if latest is not None:

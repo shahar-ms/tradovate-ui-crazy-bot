@@ -12,9 +12,6 @@
   "debug_image_interval_sec": 10,
   "max_jump_points": 30.0,
   "preprocess_recipes": [
-    "gray_only",
-    "otsu_threshold",
-    "scaled_2x_otsu",
-    "scaled_3x_binary_close"
+    "otsu_threshold"
   ]
 }
