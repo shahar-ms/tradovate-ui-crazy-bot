@@ -252,6 +252,71 @@ def test_controller_submit_manual_publishes_intents_to_bus(qtbot=None):
     assert sizes >= 1
 
 
+def test_unknown_ack_does_not_halt_when_position_watcher_wired():
+    """When the operator has calibrated position_size_region, the watcher
+    is the source of truth — we defer instead of halting on unknown ack."""
+    ex = FakeExecutor(status="unknown")
+    sup = _make_supervisor(ex)
+    # Simulate a wired watcher; don't need a real one to exercise the branch.
+    sup._position_watcher = object()  # truthy placeholder
+
+    intent = SignalIntent(action="BUY", reason="entry", trigger_price=100.0)
+    ack = ExecutionAck(intent_id=intent.intent_id, action="BUY",
+                       status="unknown", message="no_evidence_region")
+    sup._reconcile_ack(intent, ack)
+
+    assert not sup.state.halted, "watcher-wired: unknown ack must NOT halt"
+
+
+def test_position_watcher_size_zero_to_n_confirms_pending_entry():
+    """0 -> N transition with a PENDING_ENTRY engine confirms the entry."""
+    engine = StrategyEngine(_strategy_cfg())
+    engine._last_accepted_price = 100.0
+    # put engine into PENDING_ENTRY as if a BUY was just submitted
+    engine.state.to_pending_entry("BUY", trigger_price=100.0,
+                                  stop=95.0, target=110.0)
+
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+
+    sup._on_position_size_changed(1)
+
+    assert engine.state.state == "LONG"
+    assert sup.state.current_position_side == "long"
+    assert sup.state.position_size == 1
+
+
+def test_position_watcher_n_to_zero_closes_position_in_engine():
+    """N -> 0 while engine is in-position drops it to FLAT."""
+    engine = StrategyEngine(_strategy_cfg())
+    engine._last_accepted_price = 100.0
+    engine.state.to_pending_entry("BUY", trigger_price=100.0,
+                                  stop=95.0, target=110.0)
+    engine.confirm_entry_filled(100.0)   # now LONG
+    assert engine.state.state == "LONG"
+
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    sup.state.position_size = 2           # seed prev
+    sup._on_position_size_changed(0)
+
+    assert engine.state.state == "FLAT"
+    assert sup.state.current_position_side == "flat"
+    assert sup.state.position_size == 0
+
+
+def test_unknown_ack_still_halts_when_no_watcher():
+    """Fallback: without the watcher we preserve the old safe behavior."""
+    ex = FakeExecutor(status="unknown")
+    sup = _make_supervisor(ex)
+    assert sup._position_watcher is None
+    intent = SignalIntent(action="BUY", reason="entry", trigger_price=100.0)
+    ack = ExecutionAck(intent_id=intent.intent_id, action="BUY",
+                       status="unknown", message="no_evidence_region")
+    sup._reconcile_ack(intent, ack)
+    assert sup.state.halted
+
+
 def test_pause_sets_flag_and_suspends_engine_stream_ok():
     """Pause flips the flag + tells the engine the stream isn't ok."""
     sup = _make_supervisor(FakeExecutor())

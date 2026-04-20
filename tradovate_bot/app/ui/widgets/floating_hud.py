@@ -497,8 +497,9 @@ class FloatingHud(QWidget):
             self._frame_ms_lbl.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED};")
 
         # position
+        size_txt = f"  size: {s.position_size}" if s.position_size is not None else ""
         if s.position_side == "flat":
-            self._pos_lbl.setText("pos: flat")
+            self._pos_lbl.setText(f"pos: flat{size_txt}")
             self._pos_lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {TEXT_MUTED};")
             self._pnl_lbl.setVisible(False)
         else:
@@ -506,7 +507,9 @@ class FloatingHud(QWidget):
             src = s.fill_price_source
             tag = "(verified)" if src == "position_ocr" else "(—)" if src is None else f"({src})"
             color = OK_GREEN if s.position_side == "long" else BROKEN_RED
-            self._pos_lbl.setText(f"pos: {s.position_side.upper()} @ {entry_txt} {tag}")
+            self._pos_lbl.setText(
+                f"pos: {s.position_side.upper()} @ {entry_txt}{size_txt} {tag}"
+            )
             self._pos_lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {color};")
 
             # PnL row

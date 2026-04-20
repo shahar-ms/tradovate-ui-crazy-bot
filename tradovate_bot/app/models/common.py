@@ -53,6 +53,10 @@ class ScreenMap(BaseModel):
     status_region: Region | None = None
     pnl_region: Region | None = None
     instrument_label_region: Region | None = None
+    # Integer-only region showing current position size (0 when flat, >0
+    # when in a trade). Source of truth for FLAT/LONG/SHORT transitions —
+    # avoids halt-on-unknown-ack because the UI tells us the real state.
+    position_size_region: Region | None = None
 
     @field_validator("browser_name")
     @classmethod

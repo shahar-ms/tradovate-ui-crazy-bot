@@ -384,6 +384,7 @@ class UiController(QObject):
             self.signals.position_changed.emit(side)
         self.state.entry_price = pos.entry_price
         self.state.stop_price = pos.stop_price
+        self.state.position_size = rs.position_size
         self.state.target_price = pos.target_price
 
         # verified broker fill + PnL

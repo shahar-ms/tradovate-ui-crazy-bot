@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.capture.models import PriceTick
+from app.capture.position_watcher import PositionWatcher
 from app.capture.price_stream import PriceStream
 from app.execution.executor import Executor
 from app.execution.models import ExecutionAck, ExecutionIntent
@@ -72,6 +73,7 @@ class Supervisor:
         self._last_status_ts = 0.0
         self._component_health = ComponentHealth()
         self._price_stream: Optional[PriceStream] = None
+        self._position_watcher: Optional[PositionWatcher] = None
 
         # persistence
         self._state_path = paths.state_dir() / f"runtime_state_{session_id()}.json"
@@ -92,6 +94,22 @@ class Supervisor:
         )
         self._price_stream.start()
 
+        # Optional position-size OCR watcher. When the operator calibrated
+        # a position_size_region, the watcher polls it at the same cadence
+        # as the price and flips the engine's position state on size
+        # transitions (0 -> N confirms entry, N -> 0 confirms exit).
+        # Eliminates the "unknown_ack" halt path.
+        psr = self.deps.screen_map.position_size_region
+        if psr is not None:
+            self._position_watcher = PositionWatcher(
+                region=psr,
+                monitor_index=self.deps.screen_map.monitor_index,
+                bot_cfg=self.deps.bot_cfg,
+                on_size=self._on_position_size_changed,
+            )
+            self._position_watcher.start()
+            log.info("PositionWatcher enabled (%s)", psr.model_dump())
+
         self._spawn("strategy", self._strategy_loop)
         self._spawn("executor", self._executor_loop)
         self._spawn("watchdog", self._watchdog_loop)
@@ -106,6 +124,8 @@ class Supervisor:
         self._stop.set()
         if self._price_stream:
             self._price_stream.stop(timeout=timeout)
+        if self._position_watcher:
+            self._position_watcher.stop(timeout=timeout)
         for t in self._threads:
             t.join(timeout=timeout)
         try:
@@ -290,6 +310,7 @@ class Supervisor:
                 pass
 
     def _reconcile_ack(self, intent: SignalIntent, ack: ExecutionAck) -> None:
+        watcher_wired = self._position_watcher is not None
         if intent.action in ("BUY", "SELL"):
             if ack.status == "ok":
                 # Prefer the broker's verified fill price from AckReader OCR.
@@ -306,8 +327,16 @@ class Supervisor:
             elif ack.status == "failed" or ack.status == "blocked":
                 self.deps.engine.reject_entry(f"{ack.status}:{ack.message}")
             elif ack.status == "unknown":
-                # Do not assume fill. Halt instead.
-                self._halt(f"unknown_ack_on_entry:{ack.message}")
+                if watcher_wired:
+                    # Trust the PositionWatcher: when size goes from 0->N
+                    # it'll call _on_position_size_changed which confirms
+                    # the entry. Until then, stay in PENDING_ENTRY.
+                    log.info(
+                        "unknown_ack_on_entry:%s — deferring to PositionWatcher",
+                        ack.message,
+                    )
+                else:
+                    self._halt(f"unknown_ack_on_entry:{ack.message}")
         elif intent.action in ("EXIT_LONG", "EXIT_SHORT"):
             if ack.status == "ok":
                 self.deps.engine.confirm_exit_filled(realized_pnl_points=None)
@@ -316,12 +345,67 @@ class Supervisor:
                 self.state.last_fill_price = None
                 self.state.last_fill_price_source = None
             elif ack.status == "unknown":
-                self._halt(f"unknown_ack_on_exit:{ack.message}")
+                if watcher_wired:
+                    log.info(
+                        "unknown_ack_on_exit:%s — deferring to PositionWatcher",
+                        ack.message,
+                    )
+                else:
+                    self._halt(f"unknown_ack_on_exit:{ack.message}")
         elif intent.action == "CANCEL_ALL":
             if ack.status == "ok":
                 # Tradovate cleared the position — clear our tracking too
                 self.state.last_fill_price = None
                 self.state.last_fill_price_source = None
+
+    # ---- PositionWatcher integration ---- #
+
+    def _on_position_size_changed(self, new_size: int) -> None:
+        """Called from the watcher thread whenever the visible position
+        size changes. Flips the engine state to match Tradovate's reality."""
+        try:
+            engine = self.deps.engine
+            prev = self.state.position_size
+            self.state.position_size = new_size
+
+            if new_size > 0 and (prev is None or prev == 0):
+                # Position just opened. Confirm any pending entry; if nothing
+                # was pending, fall through to reflect-the-broker: flag us as
+                # being in-position so manual buttons know not to BUY again.
+                if engine.state.state == "PENDING_ENTRY":
+                    fill = self.state.last_fill_price or engine._last_accepted_price
+                    engine.confirm_entry_filled(fill)
+                    side = engine.state.position.side
+                    self.state.current_position_side = (
+                        side if side in ("long", "short") else "flat"
+                    )
+                    log.info("position opened (size=%d) — entry confirmed via watcher",
+                             new_size)
+                else:
+                    # No pending entry — user opened a position outside the bot.
+                    # Mark side unknown but non-flat.
+                    if engine.state.is_flat():
+                        log.info(
+                            "position opened externally (size=%d) — engine was FLAT; "
+                            "keeping engine FLAT, HUD will still show size",
+                            new_size,
+                        )
+
+            elif new_size == 0 and prev is not None and prev > 0:
+                # Position closed. Confirm any pending exit, else sync engine to flat.
+                if engine.state.state == "PENDING_EXIT":
+                    engine.confirm_exit_filled(realized_pnl_points=None)
+                    self.state.current_position_side = "flat"
+                    log.info("position closed (size=0) — exit confirmed via watcher")
+                elif engine.state.is_in_position():
+                    # Broker-side flat while engine thinks we're still in;
+                    # sync down.
+                    engine.state.to_pending_exit()
+                    engine.confirm_exit_filled(realized_pnl_points=None)
+                    self.state.current_position_side = "flat"
+                    log.info("position closed externally (size=0) — engine synced to FLAT")
+        except Exception:
+            log.exception("position size handler failed")
 
     def _to_execution_intent(self, intent: SignalIntent) -> Optional[ExecutionIntent]:
         a = intent.action

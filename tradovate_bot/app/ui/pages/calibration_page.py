@@ -60,6 +60,9 @@ class CalibTargets:
     cancel: Optional[Point] = None
     position: Optional[Region] = None
     status: Optional[Region] = None
+    # Integer-only region (position size). Source of truth for flat vs.
+    # in-position. Without it, the bot halts on unknown entry ack.
+    position_size: Optional[Region] = None
 
 
 ITEMS = [
@@ -68,6 +71,9 @@ ITEMS = [
     ("buy",    "point",  "Buy button",      "#35c46a", True),
     ("sell",   "point",  "Sell button",     "#e04242", True),
     ("cancel", "point",  "Cancel-all",      "#d4a017", True),
+    ("position_size", "region",
+     "Position SIZE region (integer; 0=flat, >0=in trade)",
+     "#ff7f50", True),
     ("position", "region", "Position region (optional)", "#3b82f6", False),
     ("status",   "region", "Status region (optional)",   "#a855f7", False),
 ]
@@ -728,6 +734,7 @@ class CalibrationPage(QWidget):
             cancel_all_point=self.targets.cancel,
             position_region=self.targets.position,
             status_region=self.targets.status,
+            position_size_region=self.targets.position_size,
         )
         save_model_json(screen_map, paths.screen_map_path())
         emit_event(self.signals, "info", "calibration",
@@ -758,6 +765,7 @@ class CalibrationPage(QWidget):
             cancel=sm.cancel_all_point,
             position=sm.position_region,
             status=sm.status_region,
+            position_size=sm.position_size_region,
         )
 
         full_path = paths.calibration_full_path()

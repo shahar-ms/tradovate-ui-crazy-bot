@@ -37,6 +37,9 @@ class RuntimeState(BaseModel):
     strategy_halt_reason: Optional[str] = None
 
     current_position_side: Literal["flat", "long", "short"] = "flat"
+    # Integer position size read from the calibrated position_size_region.
+    # None until the watcher has its first successful read. 0 = flat, >0 = open.
+    position_size: Optional[int] = None
     last_intent_action: Optional[str] = None
     last_ack_status: Optional[str] = None
     # verified broker fill (from AckReader OCR of the position region)
