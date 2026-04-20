@@ -79,22 +79,49 @@ def boot(argv: Optional[list[str]] = None) -> int:
     hud.place_default()
     hud.show()
 
-    # Setup button → open calibration dialog, then reload executor after save
+    # Setup button → open calibration dialog, then fully restart the bot so
+    # EVERY component reloads the new map. Just swapping the Executor's
+    # screen_map isn't enough — the PriceStream is built once at start() with
+    # a specific region, so a changed price_region wouldn't take effect.
     def _on_setup():
         dlg = CalibrationDialog(signals, hud)
         dlg.exec()
-        # always reload if calibration file is current and valid
-        if _calibration_valid():
-            try:
-                new_map = load_screen_map(paths.screen_map_path())
-                controller.reload_executor_screen_map(new_map)
-                state.calibration_loaded = True
-                state.monitor_index = new_map.monitor_index
-                state.screen_size = (new_map.screen_width, new_map.screen_height)
-            except Exception as e:
-                log.exception("post-Setup reload failed: %s", e)
-                QMessageBox.warning(hud, "Reload failed",
-                                    f"Calibration saved but reload failed:\n{e}")
+        if not _calibration_valid():
+            return
+        try:
+            new_map = load_screen_map(paths.screen_map_path())
+            # Remember the operator's current preferences so the restart
+            # doesn't silently flip them back to defaults.
+            prev_armed = state.armed
+            prev_auto  = state.auto_enabled
+            prev_mode  = state.mode if state.mode in ("PRICE_DEBUG", "PAPER", "ARMED") \
+                         else "PRICE_DEBUG"
+
+            controller.stop()
+            err = controller.start(mode=prev_mode, armed=prev_armed)
+            if err:
+                QMessageBox.warning(
+                    hud, "Restart failed",
+                    f"Calibration saved but bot restart failed:\n{err}",
+                )
+                return
+
+            # restore auto-trading flag if it was off
+            if not prev_auto:
+                controller.set_auto_enabled(False)
+
+            state.calibration_loaded = True
+            state.monitor_index = new_map.monitor_index
+            state.screen_size = (new_map.screen_width, new_map.screen_height)
+            log.info("post-Setup restart: supervisor rebuilt with new screen_map "
+                     "(%dx%d, monitor=%d, price_region=%s)",
+                     new_map.screen_width, new_map.screen_height,
+                     new_map.monitor_index,
+                     new_map.price_region.model_dump())
+        except Exception as e:
+            log.exception("post-Setup reload failed: %s", e)
+            QMessageBox.warning(hud, "Reload failed",
+                                f"Calibration saved but reload failed:\n{e}")
 
     hud.setup_requested.connect(_on_setup)
 
