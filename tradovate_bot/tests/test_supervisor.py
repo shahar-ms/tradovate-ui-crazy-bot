@@ -44,6 +44,9 @@ class FakeExecutor:
             message="fake",
         )
 
+    def set_dry_run(self, dry_run: bool) -> None:
+        self.config.dry_run = dry_run
+
     def close(self) -> None:
         pass
 

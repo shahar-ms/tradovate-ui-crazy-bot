@@ -195,12 +195,12 @@ class Supervisor:
             return
         self.state.armed = True
         self.state.mode = "ARMED"
-        self.deps.executor.config.dry_run = False
+        self.deps.executor.set_dry_run(False)
         log.warning("!!! ARMED !!! live clicks ENABLED")
 
     def _set_armed(self, armed: bool) -> None:
         self.state.armed = armed
-        self.deps.executor.config.dry_run = not armed
+        self.deps.executor.set_dry_run(not armed)
         if not armed and self.state.mode == "ARMED":
             self.state.mode = "PAPER"
         log.info("armed=%s dry_run=%s", armed, self.deps.executor.config.dry_run)
@@ -210,7 +210,7 @@ class Supervisor:
         self.state.mode = mode
         if mode != "ARMED":
             self.state.armed = False
-            self.deps.executor.config.dry_run = True
+            self.deps.executor.set_dry_run(True)
         log.info("mode %s -> %s", old, mode)
 
     def _halt(self, reason: str) -> None:

@@ -36,6 +36,17 @@ from .voting import Candidate, vote
 log = logging.getLogger(__name__)
 
 
+def _is_blank_crop(img: np.ndarray, std_threshold: float = 5.0) -> bool:
+    """True when the crop has almost no tonal variation — Tradovate's price
+    cell occasionally renders as a solid dark rectangle during repaints, and
+    we don't want those frames to count as OCR failures."""
+    if img is None or img.size == 0:
+        return True
+    # standard deviation across the whole crop: a real price cell with
+    # lit digits has std ~30+; a blank/near-solid cell sits under 5.
+    return float(img.std()) < std_threshold
+
+
 @dataclass
 class OneFrameResult:
     tick: PriceTick
@@ -195,6 +206,27 @@ class PriceStream:
                     log.exception("on_tick callback raised")
             return OneFrameResult(tick=dup, candidates=[])
         self._last_frame_hash = crop_hash
+
+        # ---------- blank-crop skip ---------- #
+        # Tradovate's price cell briefly renders nothing (repaints, tooltip
+        # overlays, DOM rebuild) — the crop comes back as a near-solid dark
+        # rectangle. That is NOT an OCR failure, the price is just not on
+        # screen right now. Without this skip, a few seconds of blanks
+        # accumulate past break_after_consecutive_failures and the bot
+        # pauses on "price_stream_broken" despite the underlying stream
+        # being healthy. Don't count, don't OCR, reuse the last good tick.
+        if _is_blank_crop(img) and self._latest_tick is not None:
+            prev = self._latest_tick
+            dup = prev.model_copy(update={
+                "ts_ms": now_ms(), "frame_id": fid,
+                "source_image_path": source_path,
+            })
+            with self._lock:
+                self._latest_tick = dup
+            # keep health alive if we had a last accepted price
+            if prev.accepted and prev.price is not None:
+                self.health.on_success(prev.price)
+            return OneFrameResult(tick=dup, candidates=[])
 
         # Measure wall-clock from this point through the OCR + vote phase.
         # Preprocessing is included because it's part of the per-frame

@@ -732,15 +732,15 @@ class FloatingHud(QWidget):
 
     def _on_buy(self) -> None:
         if self.controller:
-            self.controller.submit_manual("BUY")
+            self.controller.hud_click("BUY")
 
     def _on_sell(self) -> None:
         if self.controller:
-            self.controller.submit_manual("SELL")
+            self.controller.hud_click("SELL")
 
     def _on_cancel_all(self) -> None:
         if self.controller:
-            self.controller.cancel_all()
+            self.controller.hud_click("CANCEL_ALL")
 
     def _on_halt(self) -> None:
         if self.controller:

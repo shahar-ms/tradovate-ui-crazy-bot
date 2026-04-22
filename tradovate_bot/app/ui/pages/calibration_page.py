@@ -66,14 +66,18 @@ class CalibTargets:
 
 
 ITEMS = [
+    # Only the anchor (drift detection) and Cancel-All (safety: always
+    # clickable) are required. Everything else is optional so the operator
+    # can stage calibration incrementally — calibrate the anchor once,
+    # use the bot, then add price/buy/sell as needed.
     ("anchor", "region", "Anchor region",   "#e8781e", True),
     ("price",  "region", "Price region",    "#35c46a", True),
-    ("buy",    "point",  "Buy button",      "#35c46a", True),
-    ("sell",   "point",  "Sell button",     "#e04242", True),
     ("cancel", "point",  "Cancel-all",      "#d4a017", True),
+    ("buy",    "point",  "Buy button (optional)",      "#35c46a", False),
+    ("sell",   "point",  "Sell button (optional)",     "#e04242", False),
     ("position_size", "region",
-     "Position SIZE region (integer; 0=flat, >0=in trade)",
-     "#ff7f50", True),
+     "Position SIZE region (optional; integer; 0=flat, >0=in trade)",
+     "#ff7f50", False),
     ("position", "region", "Position region (optional)", "#3b82f6", False),
     ("status",   "region", "Status region (optional)",   "#a855f7", False),
 ]

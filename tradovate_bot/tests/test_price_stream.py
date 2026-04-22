@@ -195,8 +195,9 @@ def test_different_frame_bypasses_dedup():
         bot_cfg=cfg,
         reader=reader,
     )
-    img_a = np.zeros((10, 10, 3), dtype=np.uint8)
-    img_b = np.full((10, 10, 3), 7, dtype=np.uint8)  # different pixels
+    # Non-uniform images so the blank-crop skip doesn't short-circuit OCR.
+    img_a = np.zeros((10, 10, 3), dtype=np.uint8); img_a[0:5, :, :] = 200
+    img_b = np.zeros((10, 10, 3), dtype=np.uint8); img_b[5:10, :, :] = 200
 
     r1 = stream.process_image(img_a)
     r2 = stream.process_image(img_b)
@@ -268,10 +269,10 @@ def test_jump_rejection_after_accepted_price():
         bot_cfg=cfg,
         reader=reader,
     )
-    # Two pixel-distinct images so the new frame-dedup fast path doesn't
-    # short-circuit OCR on the second frame.
-    img_a = np.zeros((10, 10, 3), dtype=np.uint8)
-    img_b = np.full((10, 10, 3), 7, dtype=np.uint8)
+    # Two pixel-distinct, non-uniform images so neither the dedup fast path
+    # nor the blank-crop skip short-circuits OCR.
+    img_a = np.zeros((10, 10, 3), dtype=np.uint8); img_a[0:5, :, :] = 200
+    img_b = np.zeros((10, 10, 3), dtype=np.uint8); img_b[5:10, :, :] = 200
     r1 = stream.process_image(img_a)
     r2 = stream.process_image(img_b)
     assert r1.tick.accepted

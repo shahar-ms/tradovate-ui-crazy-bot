@@ -53,6 +53,13 @@ class Executor:
         self.config = config
         self._lock = threading.Lock()
 
+        # Track whether drivers were caller-injected so set_dry_run() knows
+        # whether it's allowed to swap them. Tests inject a RecordingDriver
+        # and rely on it never being replaced; production injects nothing
+        # and we manage the real/recording swap ourselves on arm/disarm.
+        self._click_driver_injected = click_driver is not None
+        self._hotkey_driver_injected = hotkey_driver is not None
+
         # Drivers: for dry-run we default to RecordingClickDriver (no OS interaction).
         if click_driver is not None:
             self.click_driver = click_driver
@@ -94,6 +101,31 @@ class Executor:
     def execute(self, intent: ExecutionIntent) -> ExecutionAck:
         with self._lock:
             return self._execute_locked(intent)
+
+    def set_dry_run(self, dry_run: bool) -> None:
+        """Flip live/dry mode and swap in the correct driver for the new
+        mode. The Executor is constructed with `config.dry_run=True` (safe
+        default), which wires up a RecordingClickDriver that does not touch
+        the OS — if we only toggled `config.dry_run` on arm, HUD clicks
+        would silently land in the recording buffer instead of Tradovate.
+        Injected drivers (tests) are never swapped."""
+        with self._lock:
+            self.config.dry_run = dry_run
+            if not self._click_driver_injected:
+                if dry_run:
+                    if not isinstance(self.click_driver, RecordingClickDriver):
+                        self.click_driver = RecordingClickDriver()
+                else:
+                    if isinstance(self.click_driver, RecordingClickDriver):
+                        self.click_driver = _build_default_click_driver(self.config)
+            if not self._hotkey_driver_injected:
+                want_recording = dry_run or not self.config.enable_hotkey_fallback
+                if want_recording:
+                    if not isinstance(self.hotkey_driver, RecordingHotkeyDriver):
+                        self.hotkey_driver = RecordingHotkeyDriver()
+                else:
+                    if isinstance(self.hotkey_driver, RecordingHotkeyDriver):
+                        self.hotkey_driver = PyAutoGUIHotkeyDriver()
 
     def close(self) -> None:
         if self._shared_capture is not None:

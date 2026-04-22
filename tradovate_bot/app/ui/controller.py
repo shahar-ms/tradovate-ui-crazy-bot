@@ -218,6 +218,26 @@ class UiController(QObject):
         self._supervisor.submit_command("cancel_all")
         emit_event(self.signals, "warn", "controller", "cancel_all requested")
 
+    def hud_click(self, action: str) -> None:
+        """HUD button click: direct pyautogui click at the calibrated x,y.
+        No guards, ack reader, engine state, or queue — just the click."""
+        if self._supervisor is None:
+            return
+        sm = self._supervisor.deps.screen_map
+        if action == "BUY":
+            pt = sm.buy_point
+        elif action == "SELL":
+            pt = sm.sell_point
+        elif action == "CANCEL_ALL":
+            pt = sm.cancel_all_point
+        else:
+            return
+        if pt is None:
+            return
+        import pyautogui
+        pyautogui.PAUSE = 0.0
+        pyautogui.click(pt.x, pt.y)
+
     def submit_manual(self, action: str) -> tuple[bool, str]:
         """
         Route a HUD-originated click through the strategy engine. Returns

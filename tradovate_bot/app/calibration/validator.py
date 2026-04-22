@@ -130,8 +130,8 @@ def validate_calibration(offline: bool = False) -> ValidationReport:
 
     w, h = screen_map.screen_width, screen_map.screen_height
 
-    # 3. regions within bounds
-    region_checks = {
+    # 3. regions within bounds (position/status are optional)
+    region_checks: dict = {
         "anchor_region": screen_map.tradovate_anchor_region,
         "price_region": screen_map.price_region,
     }
@@ -146,12 +146,14 @@ def validate_calibration(offline: bool = False) -> ValidationReport:
         else:
             report.fail(f"{name} out of bounds: {reg.model_dump()}")
 
-    # 4. points within bounds
-    point_checks = {
-        "buy_point": screen_map.buy_point,
-        "sell_point": screen_map.sell_point,
+    # 4. points within bounds (only cancel is mandatory)
+    point_checks: dict = {
         "cancel_all_point": screen_map.cancel_all_point,
     }
+    if screen_map.buy_point:
+        point_checks["buy_point"] = screen_map.buy_point
+    if screen_map.sell_point:
+        point_checks["sell_point"] = screen_map.sell_point
     for name, pt in point_checks.items():
         if _point_in_bounds(pt, w, h):
             report.ok(f"{name} within bounds ({pt.x},{pt.y})")
@@ -214,8 +216,10 @@ def _draw_overlay(img: np.ndarray, sm: ScreenMap) -> None:
     iu.draw_region(img, sm.price_region.left, sm.price_region.top,
                    sm.price_region.width, sm.price_region.height,
                    (0, 255, 0), "price")
-    iu.draw_point(img, sm.buy_point.x, sm.buy_point.y, (0, 180, 0), "buy")
-    iu.draw_point(img, sm.sell_point.x, sm.sell_point.y, (0, 0, 220), "sell")
+    if sm.buy_point:
+        iu.draw_point(img, sm.buy_point.x, sm.buy_point.y, (0, 180, 0), "buy")
+    if sm.sell_point:
+        iu.draw_point(img, sm.sell_point.x, sm.sell_point.y, (0, 0, 220), "sell")
     iu.draw_point(img, sm.cancel_all_point.x, sm.cancel_all_point.y, (0, 140, 255), "cancel")
     if sm.position_region:
         iu.draw_region(img, sm.position_region.left, sm.position_region.top,

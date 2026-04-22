@@ -43,10 +43,13 @@ class ScreenMap(BaseModel):
     tradovate_anchor_region: Region
     tradovate_anchor_reference_path: str
 
+    # Anchor, price, and Cancel-All are required. Buy/Sell are optional so
+    # the operator can calibrate incrementally — downstream code (click
+    # executor) skips gracefully when those points are missing.
     price_region: Region
 
-    buy_point: Point
-    sell_point: Point
+    buy_point: Point | None = None
+    sell_point: Point | None = None
     cancel_all_point: Point
 
     position_region: Region | None = None

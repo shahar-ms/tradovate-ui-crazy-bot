@@ -35,8 +35,10 @@ def build_overlay(out_path: Path | None = None) -> Path:
     iu.draw_region(full, screen_map.price_region.left, screen_map.price_region.top,
                    screen_map.price_region.width, screen_map.price_region.height,
                    (0, 255, 0), "price")
-    iu.draw_point(full, screen_map.buy_point.x, screen_map.buy_point.y, (0, 180, 0), "buy")
-    iu.draw_point(full, screen_map.sell_point.x, screen_map.sell_point.y, (0, 0, 220), "sell")
+    if screen_map.buy_point:
+        iu.draw_point(full, screen_map.buy_point.x, screen_map.buy_point.y, (0, 180, 0), "buy")
+    if screen_map.sell_point:
+        iu.draw_point(full, screen_map.sell_point.x, screen_map.sell_point.y, (0, 0, 220), "sell")
     iu.draw_point(full, screen_map.cancel_all_point.x, screen_map.cancel_all_point.y,
                   (0, 140, 255), "cancel")
     if screen_map.position_region:

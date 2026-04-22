@@ -2,7 +2,7 @@
   "capture_fps_target": 15,
   "ocr_backend": "tesseract",
   "min_ocr_confidence": 70.0,
-  "price_stale_ms": 1500,
+  "price_stale_ms": 5000,
   "anchor_match_threshold": 0.90,
   "click_move_duration_ms": 80,
   "click_post_delay_ms": 120,

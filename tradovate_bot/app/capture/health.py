@@ -10,10 +10,15 @@ from .models import HealthState, StreamHealth
 
 @dataclass
 class HealthConfig:
-    degrade_after_consecutive_failures: int = 5
-    break_after_consecutive_failures: int = 20
-    recover_after_successes: int = 3
-    stale_ms: int = 1500
+    # Tolerances intentionally loose: Tradovate's price cell often gets
+    # transiently obscured (tooltip, dropdown, partial repaint). We'd rather
+    # keep retrying quietly than flip to "broken" and pause trading on a
+    # 1-second blip, and we recover on the FIRST successful frame so the HUD
+    # comes back alive the instant OCR parses again.
+    degrade_after_consecutive_failures: int = 15
+    break_after_consecutive_failures: int = 60   # ~4s at 15fps
+    recover_after_successes: int = 1             # any success = recovered
+    stale_ms: int = 5000                         # 5s tolerance for gaps
 
 
 class HealthTracker:

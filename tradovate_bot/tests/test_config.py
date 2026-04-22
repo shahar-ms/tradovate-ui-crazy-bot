@@ -49,8 +49,11 @@ def test_screen_map_roundtrip(tmp_path: Path):
 
 
 def test_screen_map_missing_field(tmp_path: Path):
+    # Only anchor region/ref + cancel_all_point are required. buy/sell/price
+    # are all optional (the operator may stage calibration). Deleting
+    # cancel_all_point must still fail.
     bad = _make_screen_map().model_dump()
-    del bad["buy_point"]
+    del bad["cancel_all_point"]
     path = tmp_path / "bad.json"
     path.write_text(json.dumps(bad), encoding="utf-8")
     with pytest.raises(ConfigError):
