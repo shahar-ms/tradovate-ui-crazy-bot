@@ -135,6 +135,16 @@ class FloatingHud(QWidget):
         row1.addWidget(self._mode_lbl)
         row1.addStretch(1)
 
+        # Calibration status chip — green ✓ when a valid screen_map is loaded,
+        # red ✗ with a tooltip prompting Setup when it's missing/invalid.
+        self._cal_lbl = QLabel("CAL: ?")
+        self._cal_lbl.setStyleSheet(
+            f"font-size: 10px; font-weight: 700; "
+            f"padding: 1px 6px; border-radius: 3px; "
+            f"background-color: {PANEL_ALT}; color: {TEXT_MUTED};"
+        )
+        row1.addWidget(self._cal_lbl)
+
         self._drag_hint = QLabel("⠿")
         self._drag_hint.setToolTip("Drag to move. Right-click for more.")
         self._drag_hint.setStyleSheet(f"color: {INACTIVE_GRAY}; font-size: 14px;")
@@ -470,6 +480,25 @@ class FloatingHud(QWidget):
             f"color: {self._mode_color(s)};"
         )
 
+        # calibration status chip
+        if s.calibration_loaded:
+            self._cal_lbl.setText("CAL ✓")
+            self._cal_lbl.setStyleSheet(
+                f"font-size: 10px; font-weight: 700; padding: 1px 6px; "
+                f"border-radius: 3px; background-color: {OK_GREEN}; color: #0b0b0b;"
+            )
+            self._cal_lbl.setToolTip("Calibration loaded — screen_map.json is valid.")
+        else:
+            self._cal_lbl.setText("CAL ✗")
+            self._cal_lbl.setStyleSheet(
+                f"font-size: 10px; font-weight: 700; padding: 1px 6px; "
+                f"border-radius: 3px; background-color: {BROKEN_RED}; color: white;"
+            )
+            self._cal_lbl.setToolTip(
+                "No valid calibration. Click Setup to calibrate the price "
+                "and position regions."
+            )
+
         # price
         self._price_lbl.setText(f"{s.last_price:.2f}" if s.last_price is not None else "—")
 
@@ -626,22 +655,34 @@ class FloatingHud(QWidget):
 
     def _refresh_compact(self, s: UiState) -> None:
         """Keep the minimized block's labels up to date."""
-        # color dot: red if halted, yellow if paused, green if enabled+armed,
-        # gray if disabled
-        if s.halted:
+        # color dot: red if halted or calibration missing, yellow if paused,
+        # green if enabled+armed, gray if disabled.
+        # No-calibration takes priority over the running-state colors because
+        # nothing the bot reports is trustworthy without it.
+        if not s.calibration_loaded:
             dot_color = BROKEN_RED
+            self._compact_dot.setToolTip("No calibration — open Setup.")
+        elif s.halted:
+            dot_color = BROKEN_RED
+            self._compact_dot.setToolTip("Halted.")
         elif s.paused:
             dot_color = DEGRADED_YELLOW
+            self._compact_dot.setToolTip("Paused.")
         elif s.auto_enabled and s.armed:
             dot_color = OK_GREEN           # ENABLED — full auto live
+            self._compact_dot.setToolTip("Bot ON.")
         elif s.auto_enabled:
             dot_color = DEGRADED_YELLOW    # strategy on but clicks simulated
+            self._compact_dot.setToolTip("Strategy on, clicks simulated.")
         else:
             dot_color = INACTIVE_GRAY      # DISABLED — manual only
+            self._compact_dot.setToolTip("Bot OFF.")
         self._compact_dot.setStyleSheet(f"color: {dot_color}; font-size: 16px;")
 
         # mode text — prefer the Enabled/Disabled terminology the HUD uses
-        if s.halted:
+        if not s.calibration_loaded:
+            mode_text = "NO CAL"
+        elif s.halted:
             mode_text = "HALTED"
         elif s.paused:
             mode_text = "PAUSED"

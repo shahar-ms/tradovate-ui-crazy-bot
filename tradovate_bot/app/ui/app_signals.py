@@ -45,6 +45,9 @@ class AppSignals(QObject):
     # floating HUD feedback
     manual_rejected = Signal(str)              # reason string for HUD toast
 
+    # visual debug: emitted every time a real click is dispatched to Tradovate
+    click_dispatched = Signal(int, int)        # (screen_x, screen_y)
+
 
 # Convenience helper for emitting an event log row from anywhere.
 def emit_event(signals: AppSignals, level: str, source: str, message: str) -> None:

@@ -221,6 +221,11 @@ def _draw_overlay(img: np.ndarray, sm: ScreenMap) -> None:
         iu.draw_region(img, sm.position_region.left, sm.position_region.top,
                        sm.position_region.width, sm.position_region.height,
                        (200, 200, 0), "position")
+    size_region = getattr(sm, "position_size_region", None)
+    if size_region:
+        iu.draw_region(img, size_region.left, size_region.top,
+                       size_region.width, size_region.height,
+                       (0, 200, 255), "pos_size")
     if sm.status_region:
         iu.draw_region(img, sm.status_region.left, sm.status_region.top,
                        sm.status_region.width, sm.status_region.height,

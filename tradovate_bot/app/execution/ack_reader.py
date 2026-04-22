@@ -98,9 +98,22 @@ class AckReader:
     # ---- internals ---- #
 
     def _evidence_region(self, action: str) -> Optional[Region]:
+        # position_size_region is the small qty cell PositionWatcher polls; it
+        # changes whenever an order fills, so it's a fine fallback for both
+        # post-click diffing and fill-price OCR when position_region / status_region
+        # aren't separately calibrated (current calibrator only asks for one).
+        size_region = getattr(self.screen_map, "position_size_region", None)
         if action == "CANCEL_ALL":
-            return self.screen_map.status_region or self.screen_map.position_region
-        return self.screen_map.position_region or self.screen_map.status_region
+            return (
+                self.screen_map.status_region
+                or self.screen_map.position_region
+                or size_region
+            )
+        return (
+            self.screen_map.position_region
+            or size_region
+            or self.screen_map.status_region
+        )
 
     def _read_cancel_ack(self, region: Region, before: np.ndarray) -> AckSignal:
         # give Tradovate a moment before diffing

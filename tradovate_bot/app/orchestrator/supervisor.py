@@ -335,6 +335,7 @@ class Supervisor:
                         "unknown_ack_on_entry:%s — deferring to PositionWatcher",
                         ack.message,
                     )
+                    self._absorb_deferred_unknown_ack()
                 else:
                     self._halt(f"unknown_ack_on_entry:{ack.message}")
         elif intent.action in ("EXIT_LONG", "EXIT_SHORT"):
@@ -350,6 +351,7 @@ class Supervisor:
                         "unknown_ack_on_exit:%s — deferring to PositionWatcher",
                         ack.message,
                     )
+                    self._absorb_deferred_unknown_ack()
                 else:
                     self._halt(f"unknown_ack_on_exit:{ack.message}")
         elif intent.action == "CANCEL_ALL":
@@ -357,6 +359,24 @@ class Supervisor:
                 # Tradovate cleared the position — clear our tracking too
                 self.state.last_fill_price = None
                 self.state.last_fill_price_source = None
+            elif ack.status == "unknown" and watcher_wired:
+                # CANCEL_ALL: PositionWatcher sees size → 0 when it actually
+                # cleared. Don't count this as a halt-worthy unknown ack.
+                log.info(
+                    "unknown_ack_on_cancel:%s — deferring to PositionWatcher",
+                    ack.message,
+                )
+                self._absorb_deferred_unknown_ack()
+
+    def _absorb_deferred_unknown_ack(self) -> None:
+        """The AckReader returned 'unknown' but the PositionWatcher is wired,
+        so the real-source-of-truth (broker's own position panel) will tell
+        us what happened. Roll back the executor's streak counter so the
+        watchdog doesn't halt on a case we're already handling correctly."""
+        ex = self.deps.executor
+        if ex.consecutive_unknown_acks > 0:
+            ex.consecutive_unknown_acks -= 1
+        self._component_health.consecutive_unknown_acks = ex.consecutive_unknown_acks
 
     # ---- PositionWatcher integration ---- #
 

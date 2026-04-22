@@ -8,3 +8,5 @@ pytesseract>=0.3.10
 pytest>=8.0
 PySide6>=6.6
 pytest-qt>=4.4
+websocket-client>=1.7
+

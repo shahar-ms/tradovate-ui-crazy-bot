@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from app.capture.screen_capture import ScreenCapture
 from app.models.common import Point, ScreenMap
@@ -29,6 +29,14 @@ from .hotkey_driver import HotkeyDriver, PyAutoGUIHotkeyDriver, RecordingHotkeyD
 from .models import ActionT, ExecutionAck, ExecutionConfig, ExecutionIntent
 
 log = logging.getLogger(__name__)
+
+
+def _build_default_click_driver(config: ExecutionConfig) -> ClickDriver:
+    return PyAutoGUIClickDriver(
+        move_duration_ms=config.move_duration_ms,
+        pre_click_delay_ms=config.pre_click_delay_ms,
+        post_click_delay_ms=config.post_click_delay_ms,
+    )
 
 
 class Executor:
@@ -51,11 +59,7 @@ class Executor:
         elif config.dry_run:
             self.click_driver = RecordingClickDriver()
         else:
-            self.click_driver = PyAutoGUIClickDriver(
-                move_duration_ms=config.move_duration_ms,
-                pre_click_delay_ms=config.pre_click_delay_ms,
-                post_click_delay_ms=config.post_click_delay_ms,
-            )
+            self.click_driver = _build_default_click_driver(config)
 
         if hotkey_driver is not None:
             self.hotkey_driver = hotkey_driver
@@ -80,6 +84,10 @@ class Executor:
         )
 
         self.consecutive_unknown_acks = 0
+
+        # Optional callback invoked after every real (non-dry-run) click.
+        # The UI layer sets this to flash a marker at the click point.
+        self.on_click: Optional[Callable[[int, int], None]] = None
 
     # ---- public API ---- #
 
@@ -137,6 +145,11 @@ class Executor:
                 if target_point is None:
                     return self._failed(intent, mode, "no_click_point_for_action")
                 self.click_driver.click_point(target_point)
+                if self.on_click is not None:
+                    try:
+                        self.on_click(target_point.x, target_point.y)
+                    except Exception:
+                        log.debug("on_click callback raised", exc_info=True)
             else:
                 combo = self._hotkey_for_action(action)
                 if not combo:

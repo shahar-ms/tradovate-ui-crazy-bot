@@ -19,7 +19,7 @@ import logging
 import sys
 from typing import Optional
 
-from PySide6.QtCore import QCoreApplication, Qt
+from PySide6.QtCore import QCoreApplication, QLockFile, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.calibration.validator import validate_calibration
@@ -29,6 +29,7 @@ from app.ui.controller import UiController
 from app.ui.dialogs.calibration_dialog import CalibrationDialog
 from app.ui.theme import STYLESHEET
 from app.ui.ui_state import UiState
+from app.ui.widgets.click_flash_overlay import ClickFlashOverlay
 from app.ui.widgets.floating_hud import FloatingHud
 from app.utils import paths
 from app.utils.logging_utils import setup_logging
@@ -50,6 +51,23 @@ def boot(argv: Optional[list[str]] = None) -> int:
     app.setApplicationName("Tradovate bot")
     app.setStyleSheet(STYLESHEET)
     app.setQuitOnLastWindowClosed(True)
+
+    # Single-instance guard. QLockFile auto-removes stale locks if the
+    # previous process crashed (default 30s). Must be held on `app` so it
+    # lives for the whole process — a local would release on return.
+    lock_path = str(paths.state_dir() / "app.lock")
+    app._single_instance_lock = QLockFile(lock_path)
+    app._single_instance_lock.setStaleLockTime(30_000)
+    if not app._single_instance_lock.tryLock(100):
+        log.warning("another Tradovate bot instance is already running (%s)", lock_path)
+        QMessageBox.warning(
+            None,
+            "Tradovate bot already running",
+            "Another instance of Tradovate bot is already running.\n\n"
+            "Close the existing window (or end its python.exe process) "
+            "before launching a new one.",
+        )
+        return 0
 
     signals = AppSignals()
     state = UiState()
@@ -78,6 +96,21 @@ def boot(argv: Optional[list[str]] = None) -> int:
     hud = FloatingHud(signals=signals, state=state, controller=controller)
     hud.place_default()
     hud.show()
+
+    # Visual click debugger: flash a crosshair where the bot just clicked.
+    # Parented to `app` so it stays alive for the session; hidden by default.
+    # Deferred 250 ms so the OS has time to deliver the SendInput mouse
+    # events to Chrome BEFORE any window is drawn at the click pixel —
+    # otherwise Qt's click-through flag races the queue and Chrome may see
+    # an overlay window where the cursor is, not the Buy Mkt button.
+    click_overlay = ClickFlashOverlay()
+    app._click_flash_overlay = click_overlay  # keep alive
+
+    def _delayed_flash(x: int, y: int) -> None:
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(250, lambda: click_overlay.flash(x, y))
+
+    signals.click_dispatched.connect(_delayed_flash)
 
     # Setup button → open calibration dialog, then fully restart the bot so
     # EVERY component reloads the new map. Just swapping the Executor's

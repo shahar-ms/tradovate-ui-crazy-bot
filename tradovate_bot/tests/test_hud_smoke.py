@@ -78,7 +78,11 @@ class _FakeController:
 def _build_hud(qtbot, state: UiState | None = None,
                controller: _FakeController | None = None) -> tuple[FloatingHud, _FakeController, UiState]:
     signals = AppSignals()
-    state = state or UiState()
+    if state is None:
+        state = UiState()
+        # Default to "calibration loaded" — matches the runtime invariant that
+        # the HUD never appears unless validate_calibration() passed.
+        state.calibration_loaded = True
     controller = controller or _FakeController()
     hud = FloatingHud(signals=signals, state=state, controller=controller)
     hud._refresh_timer.stop()
@@ -474,6 +478,24 @@ def test_hud_compact_shows_halted(qtbot):
     hud._set_minimized(True)
     hud._refresh_all()
     assert hud._compact_mode.text() == "HALTED"
+
+
+def test_hud_cal_indicator_reflects_calibration_state(qtbot):
+    """CAL chip in the title row: green ✓ when a screen_map is loaded,
+    red ✗ with a Setup prompt tooltip when it isn't. The compact view
+    mirrors this as 'NO CAL' so the operator sees it even when minimized."""
+    hud, _, state = _build_hud(qtbot)
+    assert "✓" in hud._cal_lbl.text()
+
+    state.calibration_loaded = False
+    hud._refresh_all()
+    assert "✗" in hud._cal_lbl.text()
+    assert "Setup" in hud._cal_lbl.toolTip()
+
+    # compact view too
+    hud._set_minimized(True)
+    hud._refresh_all()
+    assert hud._compact_mode.text() == "NO CAL"
 
 
 def test_hud_has_no_close_x_button(qtbot):

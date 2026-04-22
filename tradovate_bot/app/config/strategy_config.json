@@ -14,7 +14,7 @@
   "cooldown_bars_after_exit": 10,
   "max_trades_per_session": 6,
   "max_consecutive_losses": 2,
-  "cancel_all_before_new_entry": true,
+  "cancel_all_before_new_entry": false,
   "session_windows": [
     {"start": "16:30", "end": "18:30", "timezone": "Asia/Nicosia"}
   ]

@@ -94,6 +94,10 @@ class UiController(QObject):
         # hook the engine emit callback to the signal bus
         br.engine._emit_cb = self._on_engine_intent  # type: ignore[attr-defined]
 
+        # Visual debug hook: every real click emits (x, y) on the UI bus so
+        # a click-flash overlay can show where the bot just pressed.
+        br.executor.on_click = lambda x, y: self.signals.click_dispatched.emit(x, y)
+
         deps = SupervisorDeps(
             bot_cfg=br.bot_cfg,
             screen_map=br.screen_map,
