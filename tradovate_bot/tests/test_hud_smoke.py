@@ -110,7 +110,8 @@ def test_hud_builds_and_reflects_flat_state(qtbot):
     hud._refresh_all()
     assert hud._mode_lbl.text() == "PAPER"
     assert hud._price_lbl.text() == "19234.25"
-    assert hud._pnl_lbl.isHidden()  # flat → PnL row hidden
+    # Flat → trade panel collapses to slim "FLAT" header.
+    assert hud._trade_panel.is_flat_view
 
 
 def test_hud_shows_dash_pnl_when_unverified(qtbot):
@@ -123,9 +124,11 @@ def test_hud_shows_dash_pnl_when_unverified(qtbot):
     state.pnl_points = None
     state.pnl_usd = None
     hud._refresh_all()
-    assert not hud._pnl_lbl.isHidden()
-    assert "—" in hud._pnl_lbl.text()
-    assert "⚠" in hud._pnl_lbl.text()
+    panel = hud._trade_panel
+    assert not panel.is_flat_view
+    assert "—" in panel._pnl_usd.text()
+    assert "⚠" in panel._pnl_usd.text()
+    assert "no verified" in panel._pnl_pts.text()
 
 
 def test_hud_shows_numeric_pnl_when_verified(qtbot):
@@ -139,16 +142,20 @@ def test_hud_shows_numeric_pnl_when_verified(qtbot):
     state.pnl_points = 5.0
     state.pnl_usd = 10.0
     hud._refresh_all()
-    assert "verified" in hud._pos_lbl.text()
-    assert "+5.00" in hud._pnl_lbl.text()
-    assert "+10.00" in hud._pnl_lbl.text()
+    panel = hud._trade_panel
+    # verified chip shown next to entry; entry value populated; PnL banner
+    # carries both points and USD. isHidden() is reliable in offscreen Qt
+    # whereas isVisible() recurses through parents (HUD isn't shown).
+    assert not panel._verified_chip.isHidden()
+    assert "19235.00" in panel._entry_val.text()
+    assert "+5.00" in panel._pnl_pts.text()
+    assert "+10.00" in panel._pnl_usd.text()
 
 
 def test_hud_shows_size_entry_and_pnl_for_scaled_position(qtbot):
     """Size watcher + entry-price watcher together feed side/size/fill
-    into state; the HUD must render LONG/SHORT with the entry price AND
-    scale the visible line with the contract count. This is the
-    user-visible payoff of the split position_size + entry_price calibration."""
+    into state; the trade panel must surface side / size / entry / PnL
+    each on its own labeled element."""
     hud, _, state = _build_hud(qtbot)
     state.mode = "ARMED"
     state.last_price = 26700.00
@@ -161,13 +168,14 @@ def test_hud_shows_size_entry_and_pnl_for_scaled_position(qtbot):
     state.pnl_usd = 78.00            # 19.5 pts * $2/pt * 2 contracts
     hud._refresh_all()
 
-    text = hud._pos_lbl.text()
-    assert "LONG" in text
-    assert "26680.50" in text
-    assert "size: 2" in text
-    assert "verified" in text
-    assert "+19.50" in hud._pnl_lbl.text()
-    assert "+78.00" in hud._pnl_lbl.text()
+    panel = hud._trade_panel
+    assert panel._side_chip.text() == "LONG"
+    assert panel._size_val.text() == "2"
+    assert panel._entry_val.text() == "26680.50"
+    assert panel._current_val.text() == "26700.00"
+    assert not panel._verified_chip.isHidden()
+    assert "+19.50" in panel._pnl_pts.text()
+    assert "+78.00" in panel._pnl_usd.text()
 
 
 def test_hud_button_rules(qtbot):

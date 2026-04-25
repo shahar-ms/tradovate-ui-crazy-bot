@@ -131,64 +131,140 @@ class _Step:
 
 def _scenario_long_win() -> tuple[str, list[_Step]]:
     """Realistic-ish path: open long, go UNDERWATER first, recover through
-    breakeven, run to profit. Lets you SEE the HUD's PnL flip red, back to
-    flat, then green before the close."""
+    breakeven, run to profit. Slower pacing (~1.5s per tick) so the HUD's
+    PnL flip from red → flat → green is fully readable as it happens."""
     return "Long winning (drawdown then recovery → +$41)", [
-        _Step(0,    "tick 26680.00 (pre-trade)",      lambda f: f.tick(26680.00)),
-        _Step(800,  "HUD click: BUY",                 lambda f: f.hud_click("BUY")),
-        _Step(1700, "broker fills LONG 1 @ 26680",    lambda f: f.open("long", 26680.00, 1)),
-        _Step(3000, "tick 26674.50 (drawdown −$11)",  lambda f: f.tick(26674.50)),
-        _Step(4200, "tick 26668.25 (max DD −$23.50)", lambda f: f.tick(26668.25)),
-        _Step(5400, "tick 26680.00 (back to BE)",     lambda f: f.tick(26680.00)),
-        _Step(6600, "tick 26690.00 (+$20)",           lambda f: f.tick(26690.00)),
-        _Step(7800, "tick 26700.50 (peak +$41)",      lambda f: f.tick(26700.50)),
-        _Step(9200, "HUD click: CANCEL ALL",          lambda f: f.hud_click("CANCEL_ALL")),
-        _Step(10000, "broker closes (size→0)",        lambda f: f.close()),
+        _Step(0,     "tick 26680.00 (pre-trade)",        lambda f: f.tick(26680.00)),
+        _Step(1500,  "HUD click: BUY",                   lambda f: f.hud_click("BUY")),
+        _Step(2700,  "broker fills LONG 1 @ 26680",      lambda f: f.open("long", 26680.00, 1)),
+        _Step(4200,  "tick 26677.50 (drawdown −$5)",     lambda f: f.tick(26677.50)),
+        _Step(5700,  "tick 26674.50 (deeper −$11)",      lambda f: f.tick(26674.50)),
+        _Step(7200,  "tick 26671.00 (deeper −$18)",      lambda f: f.tick(26671.00)),
+        _Step(8700,  "tick 26668.25 (max DD −$23.50)",   lambda f: f.tick(26668.25)),
+        _Step(10200, "tick 26672.00 (recovering −$16)",  lambda f: f.tick(26672.00)),
+        _Step(11700, "tick 26677.00 (recovering −$6)",   lambda f: f.tick(26677.00)),
+        _Step(13200, "tick 26680.00 (back to BE)",       lambda f: f.tick(26680.00)),
+        _Step(14700, "tick 26685.00 (+$10)",             lambda f: f.tick(26685.00)),
+        _Step(16200, "tick 26690.00 (+$20)",             lambda f: f.tick(26690.00)),
+        _Step(17700, "tick 26695.50 (+$31)",             lambda f: f.tick(26695.50)),
+        _Step(19200, "tick 26700.50 (peak +$41)",        lambda f: f.tick(26700.50)),
+        _Step(21000, "HUD click: CANCEL ALL",            lambda f: f.hud_click("CANCEL_ALL")),
+        _Step(22200, "broker closes (size→0)",           lambda f: f.close()),
     ]
 
 
 def _scenario_short_loss() -> tuple[str, list[_Step]]:
     """Open short, price drops in our favor first (we look like winners),
-    then rallies against us through breakeven and stops out at a loss."""
+    then rallies against us through breakeven and stops out at a loss.
+    Each phase has multiple ticks so the green→red PnL flip is visible."""
     return "Short losing (favorable first, then stops out → −$41)", [
-        _Step(0,    "tick 26700.00",                    lambda f: f.tick(26700.00)),
-        _Step(800,  "HUD click: SELL",                  lambda f: f.hud_click("SELL")),
-        _Step(1700, "broker fills SHORT 2 @ 26700",     lambda f: f.open("short", 26700.00, 2)),
-        _Step(3000, "tick 26695.50 (+$18 favorable)",   lambda f: f.tick(26695.50)),
-        _Step(4200, "tick 26692.00 (peak +$32)",        lambda f: f.tick(26692.00)),
-        _Step(5400, "tick 26700.00 (back to BE)",       lambda f: f.tick(26700.00)),
-        _Step(6600, "tick 26705.00 (rally −$20)",       lambda f: f.tick(26705.00)),
-        _Step(7800, "tick 26710.25 (stops out −$41)",   lambda f: f.tick(26710.25)),
-        _Step(9200, "HUD click: CANCEL ALL",            lambda f: f.hud_click("CANCEL_ALL")),
-        _Step(10000, "broker closes (size→0)",          lambda f: f.close()),
+        _Step(0,     "tick 26700.00",                      lambda f: f.tick(26700.00)),
+        _Step(1500,  "HUD click: SELL",                    lambda f: f.hud_click("SELL")),
+        _Step(2700,  "broker fills SHORT 2 @ 26700",       lambda f: f.open("short", 26700.00, 2)),
+        _Step(4200,  "tick 26697.50 (+$10 favorable)",     lambda f: f.tick(26697.50)),
+        _Step(5700,  "tick 26695.50 (+$18)",               lambda f: f.tick(26695.50)),
+        _Step(7200,  "tick 26693.00 (+$28)",               lambda f: f.tick(26693.00)),
+        _Step(8700,  "tick 26692.00 (peak +$32)",          lambda f: f.tick(26692.00)),
+        _Step(10200, "tick 26695.00 (giving back +$20)",   lambda f: f.tick(26695.00)),
+        _Step(11700, "tick 26698.00 (+$8)",                lambda f: f.tick(26698.00)),
+        _Step(13200, "tick 26700.00 (back to BE)",         lambda f: f.tick(26700.00)),
+        _Step(14700, "tick 26703.00 (−$12)",               lambda f: f.tick(26703.00)),
+        _Step(16200, "tick 26706.00 (−$24)",               lambda f: f.tick(26706.00)),
+        _Step(17700, "tick 26708.50 (−$34)",               lambda f: f.tick(26708.50)),
+        _Step(19200, "tick 26710.25 (stops out −$41)",     lambda f: f.tick(26710.25)),
+        _Step(21000, "HUD click: CANCEL ALL",              lambda f: f.hud_click("CANCEL_ALL")),
+        _Step(22200, "broker closes (size→0)",             lambda f: f.close()),
     ]
 
 
 def _scenario_side_flip() -> tuple[str, list[_Step]]:
-    return "Side flip (long → short, no flat between)", [
-        _Step(0,    "tick 26680.00",                lambda f: f.tick(26680.00)),
-        _Step(800,  "HUD click: BUY",               lambda f: f.hud_click("BUY")),
-        _Step(1700, "broker fills LONG 1 @ 26680",  lambda f: f.open("long", 26680.00, 1)),
-        _Step(3200, "tick 26690.00 (in profit)",    lambda f: f.tick(26690.00)),
-        _Step(4500, "HUD click: SELL",              lambda f: f.hud_click("SELL")),
-        _Step(5400, "broker reverses to SHORT 1",   lambda f: f.scale(-1, new_entry=26690.00)),
-        _Step(6700, "tick 26685.00 (short profit)", lambda f: f.tick(26685.00)),
-        _Step(8000, "HUD click: CANCEL ALL",        lambda f: f.hud_click("CANCEL_ALL")),
-        _Step(8800, "broker closes (size→0)",       lambda f: f.close()),
+    """Long → short reversal with no flat between. Both sides get a real
+    on-screen lifetime: ~10s of LONG with up + down ticks, then ~10s of
+    SHORT with up + down ticks, so you can read the panel + PnL on each
+    side instead of seeing the chip flip and the trade end."""
+    return "Side flip (long ~10s, then short ~10s)", [
+        # ---- LONG phase ---- #
+        _Step(0,     "tick 26680.00",                       lambda f: f.tick(26680.00)),
+        _Step(1500,  "HUD click: BUY",                      lambda f: f.hud_click("BUY")),
+        _Step(2700,  "broker fills LONG 1 @ 26680",         lambda f: f.open("long", 26680.00, 1)),
+        _Step(4200,  "tick 26684.00 (long +$8)",            lambda f: f.tick(26684.00)),
+        _Step(5700,  "tick 26688.00 (long +$16)",           lambda f: f.tick(26688.00)),
+        _Step(7200,  "tick 26690.50 (long peak +$21)",      lambda f: f.tick(26690.50)),
+        _Step(8700,  "tick 26687.00 (long pulls back +$14)", lambda f: f.tick(26687.00)),
+        _Step(10200, "tick 26690.00 (long +$20)",           lambda f: f.tick(26690.00)),
+        _Step(11700, "tick 26692.00 (long +$24)",           lambda f: f.tick(26692.00)),
+        # ---- FLIP ---- #
+        _Step(13200, "HUD click: SELL (reverse)",           lambda f: f.hud_click("SELL")),
+        _Step(14400, "broker reverses to SHORT 1 @ 26692",  lambda f: f.scale(-1, new_entry=26692.00)),
+        # ---- SHORT phase ---- #
+        _Step(15900, "tick 26690.00 (short +$4)",           lambda f: f.tick(26690.00)),
+        _Step(17400, "tick 26687.50 (short +$9)",           lambda f: f.tick(26687.50)),
+        _Step(18900, "tick 26684.00 (short +$16)",          lambda f: f.tick(26684.00)),
+        _Step(20400, "tick 26681.00 (short peak +$22)",     lambda f: f.tick(26681.00)),
+        _Step(21900, "tick 26684.50 (short gives back +$15)", lambda f: f.tick(26684.50)),
+        _Step(23400, "tick 26687.00 (short +$10)",          lambda f: f.tick(26687.00)),
+        _Step(24900, "tick 26685.00 (short +$14)",          lambda f: f.tick(26685.00)),
+        # ---- close ---- #
+        _Step(26700, "HUD click: CANCEL ALL",               lambda f: f.hud_click("CANCEL_ALL")),
+        _Step(27900, "broker closes (size→0)",              lambda f: f.close()),
     ]
 
 
 def _scenario_scale_in() -> tuple[str, list[_Step]]:
+    """Open 1 contract, ride to +20pts, scale to 2 contracts (USD PnL
+    doubles instantly even though the price hasn't moved), ride further.
+    Spaced out so the doubling moment is unambiguous on the HUD's PnL banner."""
     return "Scale-in (1 → 2 contracts, USD PnL doubles)", [
-        _Step(0,    "tick 26680.00",                  lambda f: f.tick(26680.00)),
-        _Step(800,  "HUD click: BUY",                 lambda f: f.hud_click("BUY")),
-        _Step(1700, "broker fills LONG 1 @ 26680",    lambda f: f.open("long", 26680.00, 1)),
-        _Step(3000, "tick 26690.00 (+$20)",           lambda f: f.tick(26690.00)),
-        _Step(4500, "scale to 2 contracts",           lambda f: f.scale(2)),
-        _Step(5800, "tick 26695.00 (USD doubles)",    lambda f: f.tick(26695.00)),
-        _Step(7100, "tick 26700.00",                  lambda f: f.tick(26700.00)),
-        _Step(8400, "HUD click: CANCEL ALL",          lambda f: f.hud_click("CANCEL_ALL")),
-        _Step(9200, "broker closes (size→0)",         lambda f: f.close()),
+        _Step(0,     "tick 26680.00",                          lambda f: f.tick(26680.00)),
+        _Step(1500,  "HUD click: BUY",                         lambda f: f.hud_click("BUY")),
+        _Step(2700,  "broker fills LONG 1 @ 26680",            lambda f: f.open("long", 26680.00, 1)),
+        _Step(4200,  "tick 26683.00 (1 contract, +$6)",        lambda f: f.tick(26683.00)),
+        _Step(5700,  "tick 26687.00 (1 contract, +$14)",       lambda f: f.tick(26687.00)),
+        _Step(7200,  "tick 26690.00 (1 contract, +$20)",       lambda f: f.tick(26690.00)),
+        _Step(9000,  "scale to 2 contracts (USD doubles!)",    lambda f: f.scale(2)),
+        _Step(10500, "tick 26690.00 (still +$40 with 2c)",     lambda f: f.tick(26690.00)),
+        _Step(12000, "tick 26693.00 (2 contracts, +$52)",      lambda f: f.tick(26693.00)),
+        _Step(13500, "tick 26696.00 (2 contracts, +$64)",      lambda f: f.tick(26696.00)),
+        _Step(15000, "tick 26700.00 (2 contracts, +$80)",      lambda f: f.tick(26700.00)),
+        _Step(16800, "HUD click: CANCEL ALL",                  lambda f: f.hud_click("CANCEL_ALL")),
+        _Step(18000, "broker closes (size→0)",                 lambda f: f.close()),
+    ]
+
+
+def _scenario_test_tp() -> tuple[str, list[_Step]]:
+    """One winning trade, ~10s, ending at take-profit. Stop & target are
+    set on entry so the HUD's TradePanel shows the Stop / Target rows
+    throughout. Slow tick pace lets the operator watch PnL climb from $0
+    toward the +$20 take-profit."""
+    return "Test TP — 1 winning trade hitting take-profit (+$20)", [
+        _Step(0,    "HUD click: BUY",                                      lambda f: f.hud_click("BUY")),
+        _Step(800,  "broker fills LONG 1 @ 26680.00  (stop 26675 / tgt 26690)",
+                                                                           lambda f: f.open("long", 26680.00, 1, stop=26675.00, target=26690.00)),
+        _Step(2000, "tick 26681.00 (+$2)",                                 lambda f: f.tick(26681.00)),
+        _Step(3300, "tick 26683.00 (+$6)",                                 lambda f: f.tick(26683.00)),
+        _Step(4600, "tick 26685.00 (+$10)",                                lambda f: f.tick(26685.00)),
+        _Step(5900, "tick 26687.00 (+$14)",                                lambda f: f.tick(26687.00)),
+        _Step(7200, "tick 26688.50 (+$17)",                                lambda f: f.tick(26688.50)),
+        _Step(8500, "tick 26690.00 (TP HIT +$20)",                         lambda f: f.tick(26690.00)),
+        _Step(9700, "broker closes (size→0)",                              lambda f: f.close()),
+    ]
+
+
+def _scenario_test_sl() -> tuple[str, list[_Step]]:
+    """One losing trade, ~10s, stopping out at stop-loss. Same shape as
+    the TP scenario but the price walks DOWN to the −$10 stop. Slow ticks
+    so the operator can watch the PnL banner go redder each step."""
+    return "Test SL — 1 losing trade hitting stop-loss (−$10)", [
+        _Step(0,    "HUD click: BUY",                                      lambda f: f.hud_click("BUY")),
+        _Step(800,  "broker fills LONG 1 @ 26680.00  (stop 26675 / tgt 26690)",
+                                                                           lambda f: f.open("long", 26680.00, 1, stop=26675.00, target=26690.00)),
+        _Step(2000, "tick 26679.00 (−$2)",                                 lambda f: f.tick(26679.00)),
+        _Step(3300, "tick 26678.00 (−$4)",                                 lambda f: f.tick(26678.00)),
+        _Step(4600, "tick 26677.50 (−$5)",                                 lambda f: f.tick(26677.50)),
+        _Step(5900, "tick 26677.00 (−$6)",                                 lambda f: f.tick(26677.00)),
+        _Step(7200, "tick 26676.00 (−$8)",                                 lambda f: f.tick(26676.00)),
+        _Step(8500, "tick 26675.00 (SL HIT −$10)",                         lambda f: f.tick(26675.00)),
+        _Step(9700, "broker closes (size→0)",                              lambda f: f.close()),
     ]
 
 
@@ -197,6 +273,8 @@ SCENARIOS: dict[str, Callable[[], tuple[str, list[_Step]]]] = {
     "short_loss":  _scenario_short_loss,
     "side_flip":   _scenario_side_flip,
     "scale_in":    _scenario_scale_in,
+    "test_tp":     _scenario_test_tp,
+    "test_sl":     _scenario_test_sl,
 }
 
 
@@ -256,7 +334,7 @@ class _DemoPanel(QWidget):
         reset.clicked.connect(reset_state)
         root.addWidget(reset)
 
-        self.resize(360, 380)
+        self.resize(360, 480)
 
     def set_status(self, text: str) -> None:
         self._status.setText(text)

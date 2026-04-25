@@ -42,6 +42,7 @@ from app.ui.theme import (ARM_ORANGE, BORDER, BROKEN_RED, CANCEL_YELLOW,
                           DEGRADED_YELLOW, INACTIVE_GRAY, OK_GREEN, PANEL,
                           PANEL_ALT, PRIMARY_BLUE, TEXT, TEXT_MUTED)
 from app.ui.ui_state import UiState
+from app.ui.widgets.trade_panel import TradePanel
 from app.utils import paths
 
 log = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ def _q_color(hex_or_name: str) -> QColor:
 
 
 HUD_WIDTH = 330
-HUD_HEIGHT = 560        # taller than before to fit the session trade list
+HUD_HEIGHT = 660        # full trade panel + session trade list
 HUD_COMPACT_WIDTH = 320
 HUD_COMPACT_HEIGHT = 46
 HUD_LEFT_MARGIN = 20
@@ -210,13 +211,12 @@ class FloatingHud(QWidget):
         # separator
         root.addWidget(self._sep())
 
-        # row 4 / 5: position + PnL
-        self._pos_lbl = QLabel("pos: flat")
-        self._pos_lbl.setStyleSheet("font-size: 12px; font-weight: 600;")
-        root.addWidget(self._pos_lbl)
-        self._pnl_lbl = QLabel("PnL: —")
-        self._pnl_lbl.setStyleSheet("font-size: 12px;")
-        root.addWidget(self._pnl_lbl)
+        # Trade-management panel — slim "FLAT" header when flat, full
+        # 2-col grid + big PnL banner when in-position. Replaces the old
+        # one-line pos/PnL labels so each parameter sits on its own
+        # clearly-labeled element.
+        self._trade_panel = TradePanel()
+        root.addWidget(self._trade_panel)
 
         # separator
         root.addWidget(self._sep())
@@ -577,41 +577,10 @@ class FloatingHud(QWidget):
             self._frame_ms_lbl.setText("— ms")
             self._frame_ms_lbl.setStyleSheet(f"font-size: 10px; color: {TEXT_MUTED};")
 
-        # position
-        size_txt = f"  size: {s.position_size}" if s.position_size is not None else ""
-        if s.position_side == "flat":
-            self._pos_lbl.setText(f"pos: flat{size_txt}")
-            self._pos_lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {TEXT_MUTED};")
-            self._pnl_lbl.setVisible(False)
-        else:
-            entry_txt = f"{s.entry_price:.2f}" if s.entry_price is not None else "—"
-            src = s.fill_price_source
-            tag = "(verified)" if src == "position_ocr" else "(—)" if src is None else f"({src})"
-            color = OK_GREEN if s.position_side == "long" else BROKEN_RED
-            self._pos_lbl.setText(
-                f"pos: {s.position_side.upper()} @ {entry_txt}{size_txt} {tag}"
-            )
-            self._pos_lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {color};")
-
-            # PnL row
-            self._pnl_lbl.setVisible(True)
-            if s.pnl_points is None:
-                self._pnl_lbl.setText("PnL: —  ⚠")
-                self._pnl_lbl.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED};")
-                self._pnl_lbl.setToolTip(
-                    "No verified broker fill. Calibrate the Position region for accurate PnL."
-                )
-            else:
-                pts = s.pnl_points
-                usd = s.pnl_usd or 0.0
-                sign_color = OK_GREEN if pts >= 0 else BROKEN_RED
-                self._pnl_lbl.setText(
-                    f"PnL: {pts:+.2f} pts   {usd:+.2f} USD"
-                )
-                self._pnl_lbl.setStyleSheet(
-                    f"font-size: 12px; font-weight: 600; color: {sign_color};"
-                )
-                self._pnl_lbl.setToolTip("")
+        # Trade-management panel handles its own slim/full rendering and
+        # all per-field formatting (side chip, entry, current, stop/target,
+        # PnL banner). One call replaces the old pos/PnL ad-hoc layout.
+        self._trade_panel.apply_state(s)
 
         # intent + ack
         intent_parts = []

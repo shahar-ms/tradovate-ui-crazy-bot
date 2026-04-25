@@ -70,10 +70,26 @@ class TradeFlow:
 
     # ---- broker-side inputs (what the OCR watchers + price stream feed) ---- #
 
-    def open(self, side: SideT, entry: float, size: int = 1) -> None:
-        """Mimic broker fill: entry_price cell + signed size cell update."""
+    def open(self, side: SideT, entry: float, size: int = 1,
+             stop: Optional[float] = None,
+             target: Optional[float] = None) -> None:
+        """Mimic broker fill: entry_price cell + signed size cell update.
+
+        When `stop` and `target` are provided, the engine is pre-armed via
+        `to_pending_entry` so the size watcher transitions it to LONG/SHORT
+        and the controller propagates `position.stop_price` + `target_price`
+        to UiState — i.e. the HUD's TradePanel shows the Stop/Target rows.
+        Without them, the engine stays FLAT (raw HUD-click style) and those
+        rows render as '—'."""
         if size <= 0:
             raise ValueError("size must be a positive contract count; sign comes from `side`")
+        if stop is not None and target is not None:
+            engine = self.sup.deps.engine
+            if engine.state.is_flat():
+                action = "BUY" if side == "long" else "SELL"
+                engine.state.to_pending_entry(
+                    action, trigger_price=entry, stop=stop, target=target,
+                )
         signed = size if side == "long" else -size
         self.sup._on_entry_price_changed(entry)
         self.sup._on_position_size_changed(signed)
@@ -81,10 +97,18 @@ class TradeFlow:
 
     def scale(self, new_size_signed: int, new_entry: Optional[float] = None) -> None:
         """Scale in / out (same side, new contract count) or flip side. If
-        new_entry is provided, also push it through the entry-price watcher."""
+        new_entry is provided, also push it through the entry-price watcher.
+
+        Order matters on a side flip: the size update triggers the
+        supervisor's flip-handling, which CLEARS last_fill_price (the
+        prior side's entry is stale). So we apply the size FIRST, then
+        the new entry — that way the fill ends up populated with the new
+        side's entry, not wiped by the flip-clear that would otherwise
+        run after we set it. For non-flip scaling the order doesn't
+        matter (no flip-clear runs)."""
+        self.sup._on_position_size_changed(new_size_signed)
         if new_entry is not None:
             self.sup._on_entry_price_changed(new_entry)
-        self.sup._on_position_size_changed(new_size_signed)
         self._snapshot(f"scale -> size={new_size_signed} entry={new_entry}")
 
     def tick(self, price: float) -> None:

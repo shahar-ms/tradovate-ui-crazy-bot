@@ -205,6 +205,72 @@ def test_e2e_short_losing_trade_records_one_journal_row():
     assert rec.pnl_usd == pytest.approx(-41.00)
 
 
+def test_e2e_flip_with_new_entry_produces_live_pnl_on_new_side():
+    """Regression: flow.scale(-1, new_entry=X) used to apply the entry
+    BEFORE the size change. The size change's flip-handling then cleared
+    last_fill_price, leaving the new short side with no fill — HUD shows
+    'no verified fill' and PnL never computes. Order is now size-then-
+    entry so the new fill survives the flip-clear."""
+    sup = _make_supervisor(FakeExecutor())
+    flow = TradeFlow(sup)
+
+    flow.tick(26680.00)
+    flow.open("long", entry=26680.00, size=1)
+    flow.tick(26690.00)
+    assert flow.latest.fill == 26680.00
+
+    # Flip to short with a new entry in the same call.
+    flow.scale(-1, new_entry=26690.00)
+    assert flow.latest.side == "short"
+    assert flow.latest.fill == 26690.00, \
+        "new short fill must survive the flip's last_fill_price clear"
+
+    # A subsequent tick must compute PnL against the NEW entry, not None.
+    flow.tick(26687.00)
+    assert flow.latest.fill == 26690.00
+    assert flow.latest.pnl_points == pytest.approx(3.00)
+    assert flow.latest.pnl_usd == pytest.approx(6.00)
+
+
+def test_e2e_demo_test_tp_scenario_records_one_winning_trade():
+    """Drive the demo's `test_tp` scenario synchronously (skip the
+    QTimer scheduling — just fire each step's lambda in order). One long
+    trade @ 26680 hits target @ 26690: +$20."""
+    from app.ui.demo_hud_trade import _scenario_test_tp
+
+    sup, journal = _make_supervisor_with_journal()
+    flow = TradeFlow(sup)
+    _, steps = _scenario_test_tp()
+    for step in steps:
+        step.fn(flow)
+
+    assert journal.session_count() == 1
+    rec = journal.session_trades[0]
+    assert rec.side == "long"
+    assert rec.entry_price == pytest.approx(26680.00)
+    assert rec.exit_price == pytest.approx(26690.00)
+    assert rec.pnl_usd == pytest.approx(20.0)
+
+
+def test_e2e_demo_test_sl_scenario_records_one_losing_trade():
+    """Mirror of the TP test. One long trade @ 26680 hits stop @ 26675:
+    −$10 (5 pts * $2 * 1 contract)."""
+    from app.ui.demo_hud_trade import _scenario_test_sl
+
+    sup, journal = _make_supervisor_with_journal()
+    flow = TradeFlow(sup)
+    _, steps = _scenario_test_sl()
+    for step in steps:
+        step.fn(flow)
+
+    assert journal.session_count() == 1
+    rec = journal.session_trades[0]
+    assert rec.side == "long"
+    assert rec.entry_price == pytest.approx(26680.00)
+    assert rec.exit_price == pytest.approx(26675.00)
+    assert rec.pnl_usd == pytest.approx(-10.0)
+
+
 def test_e2e_two_back_to_back_trades_accumulate_in_journal():
     """Sequential trades within a single session — both should land,
     in order, with cumulative PnL retrievable via session_trades."""
