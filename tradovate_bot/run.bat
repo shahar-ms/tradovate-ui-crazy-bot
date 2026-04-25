@@ -21,6 +21,7 @@ echo   1. Launch app        (floating HUD, the whole UI)
 echo   2. Replay synthetic  (300 synth ticks through engine)
 echo   3. Overlay preview   (draw calibrated points on screen)
 echo   4. Run tests         (pytest)
+echo   5. HUD trade demo    (simulated trades on the HUD, no broker)
 echo   I. Install / upgrade Python deps
 echo   0. Exit
 echo -----------------------------------------------------
@@ -30,6 +31,7 @@ if "%choice%"=="1" goto ui
 if "%choice%"=="2" goto replay
 if "%choice%"=="3" goto overlay
 if "%choice%"=="4" goto tests
+if "%choice%"=="5" goto demo
 if /I "%choice%"=="I" goto deps
 if "%choice%"=="0" goto end
 goto menu
@@ -51,6 +53,10 @@ goto menu
 :tests
 "%PY%" -m pytest tests/ -v
 pause
+goto menu
+
+:demo
+"%PY%" -m app.ui.demo_hud_trade
 goto menu
 
 :deps
