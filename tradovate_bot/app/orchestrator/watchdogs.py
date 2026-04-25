@@ -16,6 +16,13 @@ from .runtime_models import ComponentHealth
 @dataclass
 class WatchdogConfig:
     max_price_silence_ms: int = 3000
+    # How long the parsed price can stay UNCHANGED before we treat the
+    # market as inactive (e.g. exchange closed, weekend, holiday). 60s
+    # is generous: liquid MNQ ticks every few seconds in regular hours,
+    # and a quiet 60s window on a closed market is unambiguous. Pause —
+    # not halt — because trading auto-resumes the moment a fresh tick
+    # with a different price arrives.
+    max_value_silence_ms: int = 60_000
     max_consecutive_unknown_acks: int = 2
     max_queue_backlog: int = 512
 
@@ -26,6 +33,22 @@ def price_watchdog(health_state: HealthState, ms_since_last_tick: int,
         return "price_stream_broken"
     if ms_since_last_tick > cfg.max_price_silence_ms:
         return f"price_silence:{ms_since_last_tick}ms"
+    return None
+
+
+def value_silence_watchdog(ms_since_last_change: int,
+                           cfg: WatchdogConfig) -> Optional[str]:
+    """Pause when the last_price hasn't actually moved for too long —
+    typically: market closed, exchange holiday, low-liquidity dead zone.
+    Distinct from `price_watchdog`: there OCR ticks may still be flowing
+    (confirming reads), but the underlying market isn't active.
+
+    Returns None when ms_since_last_change is 0 (no value change recorded
+    yet — fresh boot) so the bot doesn't pause itself the instant it starts."""
+    if ms_since_last_change <= 0:
+        return None
+    if ms_since_last_change > cfg.max_value_silence_ms:
+        return f"market_inactive:{ms_since_last_change // 1000}s_no_price_change"
     return None
 
 

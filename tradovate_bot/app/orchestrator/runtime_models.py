@@ -31,6 +31,13 @@ class RuntimeState(BaseModel):
     last_price_tick_ts_ms: int = 0
     last_execution_ack_ts_ms: int = 0
     last_price: Optional[float] = None
+    # Wall-clock ms of the most recent tick whose price actually CHANGED
+    # vs. the prior accepted price. Distinct from last_price_tick_ts_ms,
+    # which updates on every accepted tick (including confirming reads of
+    # an unchanged price). The "value silence" watchdog gates trading on
+    # this so a closed exchange / completely static market can't fire
+    # entries even when OCR is happily confirming the same price.
+    last_price_change_ts_ms: int = 0
 
     price_stream_health: HealthState = "ok"
     anchor_guard_ok: bool = True

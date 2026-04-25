@@ -37,7 +37,8 @@ from .runtime_models import (ComponentHealth, CommandName, RuntimeCommand, Runti
                              RuntimeState)
 from .trade_journal import TradeJournal
 from .watchdogs import (WatchdogConfig, anchor_watchdog, execution_watchdog,
-                        first_halt_reason, price_watchdog, queue_watchdog)
+                        first_halt_reason, price_watchdog, queue_watchdog,
+                        value_silence_watchdog)
 
 log = logging.getLogger(__name__)
 
@@ -281,6 +282,12 @@ class Supervisor:
 
             self.state.last_price_tick_ts_ms = tick.ts_ms
             if tick.accepted and tick.price is not None:
+                # Track value-change time separately from tick-time. A
+                # closed market can stream confirming reads of the same
+                # price for hours; we want to know when the market is
+                # actually MOVING, not when OCR last spoke.
+                if self.state.last_price != tick.price:
+                    self.state.last_price_change_ts_ms = tick.ts_ms
                 self.state.last_price = tick.price
 
             # update engine health gate
@@ -601,13 +608,19 @@ class Supervisor:
                 continue
 
             # Pause-class reasons: transient, auto-recoverable. Price stream
-            # broken or stale, or anchor guard failing. Trading suspends while
-            # paused; resumes as soon as the conditions clear.
+            # broken or stale, anchor guard failing, or the market itself
+            # being inactive (closed exchange, weekend, holiday). Trading
+            # suspends while paused; resumes as soon as the conditions clear.
             ms_since = now_ms() - (self.state.last_price_tick_ts_ms or now_ms())
+            ms_since_change = (
+                now_ms() - self.state.last_price_change_ts_ms
+                if self.state.last_price_change_ts_ms else 0
+            )
             pause_reason = first_halt_reason([
                 price_watchdog(self._component_health.price_stream_health, ms_since,
                                self.watchdog_cfg),
                 anchor_watchdog(self.state.anchor_guard_ok),
+                value_silence_watchdog(ms_since_change, self.watchdog_cfg),
             ])
 
             if pause_reason:
