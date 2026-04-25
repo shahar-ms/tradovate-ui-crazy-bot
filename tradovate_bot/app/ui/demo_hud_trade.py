@@ -266,26 +266,55 @@ def _stub_pyautogui() -> None:
         log.warning("pyautogui not importable — demo will skip the HUD click side effect")
 
 
+def _enable_windows_dpi_awareness() -> None:
+    """Match run_ui.py: declare per-monitor DPI awareness BEFORE Qt
+    initializes its window subsystem. Silences the Qt warning
+    'SetProcessDpiAwarenessContext() failed: The operation completed
+    successfully.' that fires when Qt's default V2 awareness clashes
+    with whatever the process inherited."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def _run_scenario_on_flow(steps: list[_Step], flow: TradeFlow,
+                          controller: UiController, hud: FloatingHud,
                           set_status: Callable[[str], None],
                           on_done: Callable[[], None]) -> None:
     """Schedule every step on QTimer.singleShot at its absolute t_ms.
-    The HUD's own refresh timer (~400ms) will display the changes; for
-    snappier feedback we also nudge the controller's poll right after
-    each step so RuntimeState -> UiState propagation isn't bottlenecked
-    on the controller's 100 ms poll cadence."""
+    After each step we explicitly run the controller's poll AND the HUD's
+    refresh so the screen update is instant instead of waiting up to
+    ~480ms for both timers to fire on their own (controller poll 80ms +
+    HUD refresh 400ms)."""
+    def fire(step: _Step) -> None:
+        step.fn(flow)
+        # Push supervisor state -> UiState immediately, then repaint.
+        controller._poll_once()
+        hud._refresh_all()
+        s = flow.latest
+        set_status(
+            f"t={step.t_ms}ms  {step.label}\n"
+            f"   → side={s.side}  size={s.size}  "
+            f"fill={s.fill}  last={s.last_price}  pnl_usd={s.pnl_usd}"
+        )
+
     for step in steps:
-        QTimer.singleShot(step.t_ms, lambda s=step: (
-            s.fn(flow),
-            set_status(f"t={s.t_ms}ms  {s.label}  →  "
-                       f"{flow.latest.side} size={flow.latest.size} "
-                       f"fill={flow.latest.fill}  pnl={flow.latest.pnl_usd}"),
-        ))
+        QTimer.singleShot(step.t_ms, lambda s=step: fire(s))
+
     last = steps[-1].t_ms if steps else 0
-    QTimer.singleShot(last + 600, lambda: (
-        set_status(_done_status(flow)),
-        on_done(),
-    ))
+    def finish() -> None:
+        controller._poll_once()
+        hud._refresh_all()
+        set_status(_done_status(flow))
+        on_done()
+    QTimer.singleShot(last + 600, finish)
 
 
 def _done_status(flow: TradeFlow) -> str:
@@ -305,6 +334,7 @@ def _reset_demo_state(sup: Supervisor) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     setup_logging(level="INFO")
+    _enable_windows_dpi_awareness()   # must precede Qt init
     _stub_pyautogui()
 
     app = QApplication.instance() or QApplication(argv or sys.argv)
@@ -351,7 +381,8 @@ def main(argv: list[str] | None = None) -> int:
             busy["running"] = False
             log.info("demo scenario done")
 
-        _run_scenario_on_flow(steps, flow, panel.set_status, done)
+        _run_scenario_on_flow(steps, flow, controller, hud,
+                              panel.set_status, done)
 
     def reset() -> None:
         busy["running"] = False
