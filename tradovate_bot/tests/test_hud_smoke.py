@@ -38,6 +38,7 @@ class _FakeController:
     def __init__(self):
         self.is_running_val = False
         self.manual_calls: list[str] = []
+        self.hud_clicks: list[str] = []
         self.cancel_all_calls = 0
         self.disarm_calls = 0
         self.halt_calls: list[str] = []
@@ -49,6 +50,11 @@ class _FakeController:
     def submit_manual(self, action):
         self.manual_calls.append(action)
         return True, "emitted"
+
+    def hud_click(self, action):
+        self.hud_clicks.append(action)
+        if action == "CANCEL_ALL":
+            self.cancel_all_calls += 1
 
     def cancel_all(self):
         self.cancel_all_calls += 1
@@ -138,6 +144,32 @@ def test_hud_shows_numeric_pnl_when_verified(qtbot):
     assert "+10.00" in hud._pnl_lbl.text()
 
 
+def test_hud_shows_size_entry_and_pnl_for_scaled_position(qtbot):
+    """Size watcher + entry-price watcher together feed side/size/fill
+    into state; the HUD must render LONG/SHORT with the entry price AND
+    scale the visible line with the contract count. This is the
+    user-visible payoff of the split position_size + entry_price calibration."""
+    hud, _, state = _build_hud(qtbot)
+    state.mode = "ARMED"
+    state.last_price = 26700.00
+    state.position_side = "long"
+    state.entry_price = 26680.50
+    state.fill_price = 26680.50
+    state.fill_price_source = "position_ocr"
+    state.position_size = 2
+    state.pnl_points = 19.50
+    state.pnl_usd = 78.00            # 19.5 pts * $2/pt * 2 contracts
+    hud._refresh_all()
+
+    text = hud._pos_lbl.text()
+    assert "LONG" in text
+    assert "26680.50" in text
+    assert "size: 2" in text
+    assert "verified" in text
+    assert "+19.50" in hud._pnl_lbl.text()
+    assert "+78.00" in hud._pnl_lbl.text()
+
+
 def test_hud_button_rules(qtbot):
     hud, ctrl, state = _build_hud(qtbot)
     # not running → everything but Setup disabled
@@ -194,7 +226,7 @@ def test_buy_button_routes_through_controller(qtbot):
     state.armed = True   # buttons only clickable when armed
     hud._refresh_all()
     hud._buy_btn.click()
-    assert ctrl.manual_calls == ["BUY"]
+    assert ctrl.hud_clicks == ["BUY"]
 
 
 def test_cancel_and_halt_route_correctly(qtbot, monkeypatch):

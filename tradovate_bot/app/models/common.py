@@ -56,10 +56,16 @@ class ScreenMap(BaseModel):
     status_region: Region | None = None
     pnl_region: Region | None = None
     instrument_label_region: Region | None = None
-    # Integer-only region showing current position size (0 when flat, >0
-    # when in a trade). Source of truth for FLAT/LONG/SHORT transitions —
-    # avoids halt-on-unknown-ack because the UI tells us the real state.
+    # Signed-integer region showing current position size. Positive = long,
+    # negative = short, 0 = flat. Source of truth for FLAT/LONG/SHORT
+    # transitions — avoids halt-on-unknown-ack because the UI tells us the
+    # real state. Side is derived from the sign.
     position_size_region: Region | None = None
+    # Plain-decimal region showing the broker's verified entry (average fill)
+    # price while in a position. Paired with position_size_region — together
+    # they give the HUD everything it needs for live PnL without depending
+    # on AckReader's fill-price OCR. Empty / blank when flat.
+    entry_price_region: Region | None = None
 
     @field_validator("browser_name")
     @classmethod

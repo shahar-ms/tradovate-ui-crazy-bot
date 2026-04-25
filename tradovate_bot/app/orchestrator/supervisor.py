@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.capture.models import PriceTick
-from app.capture.position_watcher import PositionWatcher
+from app.capture.position_watcher import EntryPriceWatcher, PositionWatcher
 from app.capture.price_stream import PriceStream
 from app.execution.executor import Executor
 from app.execution.models import ExecutionAck, ExecutionIntent
@@ -74,6 +74,7 @@ class Supervisor:
         self._component_health = ComponentHealth()
         self._price_stream: Optional[PriceStream] = None
         self._position_watcher: Optional[PositionWatcher] = None
+        self._entry_price_watcher: Optional[EntryPriceWatcher] = None
 
         # persistence
         self._state_path = paths.state_dir() / f"runtime_state_{session_id()}.json"
@@ -94,21 +95,34 @@ class Supervisor:
         )
         self._price_stream.start()
 
-        # Optional position-size OCR watcher. When the operator calibrated
-        # a position_size_region, the watcher polls it at the same cadence
-        # as the price and flips the engine's position state on size
-        # transitions (0 -> N confirms entry, N -> 0 confirms exit).
-        # Eliminates the "unknown_ack" halt path.
-        psr = self.deps.screen_map.position_size_region
-        if psr is not None:
+        # Two independent broker-panel watchers, each keyed to its own
+        # calibrated cell. Either can be enabled on its own, but they're
+        # most useful together: the size watcher gives side + contract
+        # count from the signed integer; the entry-price watcher gives the
+        # verified fill for PnL. Both cells update rarely (only on position
+        # transitions), so the watchers effectively go idle while you hold
+        # a position — no wasted OCR.
+        sm = self.deps.screen_map
+        if sm.position_size_region is not None:
             self._position_watcher = PositionWatcher(
-                region=psr,
-                monitor_index=self.deps.screen_map.monitor_index,
+                region=sm.position_size_region,
+                monitor_index=sm.monitor_index,
                 bot_cfg=self.deps.bot_cfg,
                 on_size=self._on_position_size_changed,
             )
             self._position_watcher.start()
-            log.info("PositionWatcher enabled (%s)", psr.model_dump())
+            log.info("PositionWatcher enabled (%s)",
+                     sm.position_size_region.model_dump())
+        if sm.entry_price_region is not None:
+            self._entry_price_watcher = EntryPriceWatcher(
+                region=sm.entry_price_region,
+                monitor_index=sm.monitor_index,
+                bot_cfg=self.deps.bot_cfg,
+                on_price=self._on_entry_price_changed,
+            )
+            self._entry_price_watcher.start()
+            log.info("EntryPriceWatcher enabled (%s)",
+                     sm.entry_price_region.model_dump())
 
         self._spawn("strategy", self._strategy_loop)
         self._spawn("executor", self._executor_loop)
@@ -126,6 +140,8 @@ class Supervisor:
             self._price_stream.stop(timeout=timeout)
         if self._position_watcher:
             self._position_watcher.stop(timeout=timeout)
+        if self._entry_price_watcher:
+            self._entry_price_watcher.stop(timeout=timeout)
         for t in self._threads:
             t.join(timeout=timeout)
         try:
@@ -310,7 +326,12 @@ class Supervisor:
                 pass
 
     def _reconcile_ack(self, intent: SignalIntent, ack: ExecutionAck) -> None:
-        watcher_wired = self._position_watcher is not None
+        # Either watcher is a source of broker-side truth, so 'watcher_wired'
+        # means "we can defer an unknown ack to OCR truth instead of halting".
+        watcher_wired = (
+            self._position_watcher is not None
+            or self._entry_price_watcher is not None
+        )
         if intent.action in ("BUY", "SELL"):
             if ack.status == "ok":
                 # Prefer the broker's verified fill price from AckReader OCR.
@@ -381,51 +402,110 @@ class Supervisor:
     # ---- PositionWatcher integration ---- #
 
     def _on_position_size_changed(self, new_size: int) -> None:
-        """Called from the watcher thread whenever the visible position
-        size changes. Flips the engine state to match Tradovate's reality."""
+        """Called from PositionWatcher whenever the position-size cell
+        changes. `new_size` is SIGNED: >0 = long, <0 = short, 0 = flat.
+
+        Drives engine state on three kinds of edges:
+          - 0 -> in-position (open)
+          - in-position -> 0 (close)
+          - long <-> short (direct reversal, no flat in between)
+
+        Always mirrors the broker's reported side + count onto the UI
+        state so the HUD matches reality even when the bot didn't initiate
+        the trade."""
         try:
             engine = self.deps.engine
-            prev = self.state.position_size
-            self.state.position_size = new_size
+            prev_abs = self.state.position_size or 0
+            prev_side = self.state.current_position_side or "flat"
+            new_abs = abs(new_size)
+            new_side: str = ("long" if new_size > 0
+                             else "short" if new_size < 0
+                             else "flat")
 
-            if new_size > 0 and (prev is None or prev == 0):
-                # Position just opened. Confirm any pending entry; if nothing
-                # was pending, fall through to reflect-the-broker: flag us as
-                # being in-position so manual buttons know not to BUY again.
+            # Broker is ground truth for both side and contract count.
+            self.state.position_size = new_abs
+            self.state.current_position_side = new_side  # type: ignore[assignment]
+
+            # Cross-check vs the user's last raw HUD click. Sign wins (it's
+            # what the broker actually did), but log a warning so the
+            # operator knows their click didn't land the way they expected.
+            if new_side in ("long", "short") and self.state.last_manual_click_action:
+                expected = {"BUY": "long", "SELL": "short"}.get(
+                    self.state.last_manual_click_action
+                )
+                if expected and expected != new_side:
+                    log.warning(
+                        "position side mismatch: last HUD click was %s (expected %s) "
+                        "but broker shows %s — trusting broker",
+                        self.state.last_manual_click_action, expected, new_side,
+                    )
+
+            was_in_position = prev_side in ("long", "short")
+            now_in_position = new_side in ("long", "short")
+            is_flip = was_in_position and now_in_position and prev_side != new_side
+
+            if is_flip:
+                # Long<->short reversal with no flat between. Treat as
+                # close+reopen: sync the engine out of its old side, clear
+                # the stale fill price so PnL doesn't briefly compute
+                # against the OLD entry with the NEW side, and nudge the
+                # entry-price watcher so it re-emits when the cell refreshes
+                # (handles the race where entry_price already updated BEFORE
+                # size did).
+                if engine.state.is_in_position():
+                    engine.state.to_pending_exit()
+                    engine.confirm_exit_filled(realized_pnl_points=None)
+                self.state.last_fill_price = None
+                self.state.last_fill_price_source = None
+                self.state.last_manual_click_action = None
+                if self._entry_price_watcher is not None:
+                    self._entry_price_watcher.invalidate()
+                log.info(
+                    "position flipped %s %d -> %s %d — engine synced, fill cleared",
+                    prev_side, prev_abs, new_side, new_abs,
+                )
+            elif new_abs > 0 and prev_abs == 0:
                 if engine.state.state == "PENDING_ENTRY":
                     fill = self.state.last_fill_price or engine._last_accepted_price
                     engine.confirm_entry_filled(fill)
-                    side = engine.state.position.side
-                    self.state.current_position_side = (
-                        side if side in ("long", "short") else "flat"
+                    log.info(
+                        "position opened (%s %d) — entry confirmed via watcher",
+                        new_side, new_abs,
                     )
-                    log.info("position opened (size=%d) — entry confirmed via watcher",
-                             new_size)
                 else:
-                    # No pending entry — user opened a position outside the bot.
-                    # Mark side unknown but non-flat.
-                    if engine.state.is_flat():
-                        log.info(
-                            "position opened externally (size=%d) — engine was FLAT; "
-                            "keeping engine FLAT, HUD will still show size",
-                            new_size,
-                        )
-
-            elif new_size == 0 and prev is not None and prev > 0:
-                # Position closed. Confirm any pending exit, else sync engine to flat.
+                    log.info(
+                        "position opened externally (%s %d) — engine stays FLAT",
+                        new_side, new_abs,
+                    )
+            elif new_abs == 0 and prev_abs > 0:
                 if engine.state.state == "PENDING_EXIT":
                     engine.confirm_exit_filled(realized_pnl_points=None)
-                    self.state.current_position_side = "flat"
-                    log.info("position closed (size=0) — exit confirmed via watcher")
+                    log.info("position closed — exit confirmed via watcher")
                 elif engine.state.is_in_position():
-                    # Broker-side flat while engine thinks we're still in;
-                    # sync down.
                     engine.state.to_pending_exit()
                     engine.confirm_exit_filled(realized_pnl_points=None)
-                    self.state.current_position_side = "flat"
-                    log.info("position closed externally (size=0) — engine synced to FLAT")
+                    log.info("position closed externally — engine synced to FLAT")
+                self.state.last_manual_click_action = None
+                # No position -> no meaningful fill. Clear immediately so
+                # the HUD's PnL row hides on the same refresh tick instead
+                # of lagging until the entry-price watcher sees a blank cell.
+                self.state.last_fill_price = None
+                self.state.last_fill_price_source = None
         except Exception:
             log.exception("position size handler failed")
+
+    def _on_entry_price_changed(self, price: Optional[float]) -> None:
+        """Called from EntryPriceWatcher whenever the entry-price cell
+        changes. `price` is None when the cell is blank/unparseable
+        (typically because we're flat) — in that case clear the stale
+        fill so the HUD's PnL line flips back to '—'."""
+        try:
+            self.state.last_fill_price = price
+            self.state.last_fill_price_source = (
+                "position_ocr" if price is not None else None
+            )
+        except Exception:
+            log.exception("entry price handler failed")
 
     def _to_execution_intent(self, intent: SignalIntent) -> Optional[ExecutionIntent]:
         a = intent.action

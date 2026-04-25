@@ -40,6 +40,11 @@ class RuntimeState(BaseModel):
     # Integer position size read from the calibrated position_size_region.
     # None until the watcher has its first successful read. 0 = flat, >0 = open.
     position_size: Optional[int] = None
+    # Direction of the most recent raw HUD click (BUY / SELL). The HUD's
+    # BUY/SELL buttons fire a direct pyautogui click and bypass the engine,
+    # so the engine never learns the side. PositionWatcher uses this to fill
+    # in current_position_side when it sees size 0 -> N on an external open.
+    last_manual_click_action: Optional[str] = None
     last_intent_action: Optional[str] = None
     last_ack_status: Optional[str] = None
     # verified broker fill (from AckReader OCR of the position region)

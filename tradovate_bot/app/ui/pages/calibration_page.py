@@ -60,9 +60,13 @@ class CalibTargets:
     cancel: Optional[Point] = None
     position: Optional[Region] = None
     status: Optional[Region] = None
-    # Integer-only region (position size). Source of truth for flat vs.
-    # in-position. Without it, the bot halts on unknown entry ack.
+    # Signed-integer position-size cell. Sign gives side: +1 = long, -1 =
+    # short, 0 = flat. Source of truth for FLAT <-> in-position transitions.
     position_size: Optional[Region] = None
+    # Entry-price cell (verified broker average fill while in a position).
+    # Paired with position_size: together they give the HUD everything
+    # needed for live PnL without AckReader's fill-price OCR.
+    entry_price: Optional[Region] = None
 
 
 ITEMS = [
@@ -76,8 +80,11 @@ ITEMS = [
     ("buy",    "point",  "Buy button (optional)",      "#35c46a", False),
     ("sell",   "point",  "Sell button (optional)",     "#e04242", False),
     ("position_size", "region",
-     "Position SIZE region (optional; integer; 0=flat, >0=in trade)",
+     "Position SIZE region (optional; signed integer; +N=long, -N=short, 0=flat)",
      "#ff7f50", False),
+    ("entry_price", "region",
+     "Entry PRICE region (optional; broker's verified avg fill — drives PnL)",
+     "#22c55e", False),
     ("position", "region", "Position region (optional)", "#3b82f6", False),
     ("status",   "region", "Status region (optional)",   "#a855f7", False),
 ]
@@ -739,6 +746,7 @@ class CalibrationPage(QWidget):
             position_region=self.targets.position,
             status_region=self.targets.status,
             position_size_region=self.targets.position_size,
+            entry_price_region=self.targets.entry_price,
         )
         save_model_json(screen_map, paths.screen_map_path())
         emit_event(self.signals, "info", "calibration",
@@ -770,6 +778,7 @@ class CalibrationPage(QWidget):
             position=sm.position_region,
             status=sm.status_region,
             position_size=sm.position_size_region,
+            entry_price=sm.entry_price_region,
         )
 
         full_path = paths.calibration_full_path()

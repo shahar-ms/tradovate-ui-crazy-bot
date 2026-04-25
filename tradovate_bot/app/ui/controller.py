@@ -220,7 +220,9 @@ class UiController(QObject):
 
     def hud_click(self, action: str) -> None:
         """HUD button click: direct pyautogui click at the calibrated x,y.
-        No guards, ack reader, engine state, or queue — just the click."""
+        No guards, ack reader, engine state, or queue — just the click.
+        The action is stashed on the supervisor state so the PositionWatcher
+        can infer the side (long/short) when it sees size flip 0 -> N."""
         if self._supervisor is None:
             return
         sm = self._supervisor.deps.screen_map
@@ -234,6 +236,7 @@ class UiController(QObject):
             return
         if pt is None:
             return
+        self._supervisor.state.last_manual_click_action = action
         import pyautogui
         pyautogui.PAUSE = 0.0
         pyautogui.click(pt.x, pt.y)
@@ -400,13 +403,25 @@ class UiController(QObject):
         # auto-trading toggle (set by HUD Enable/Disable button)
         self.state.auto_enabled = bool(getattr(sup.deps.engine, "auto_enabled", True))
 
-        # position
+        # position — prefer the engine's side (bot-initiated entries have the
+        # full side + entry price). When the engine is FLAT but the watcher
+        # saw a position open (raw HUD click or external fill), fall back to
+        # the side tracked on the supervisor so the HUD doesn't keep
+        # displaying "flat size: N".
         pos = sup.deps.engine.state.position
         side = pos.side
+        if side == "flat" and rs.current_position_side in ("long", "short") \
+                and (rs.position_size or 0) > 0:
+            side = rs.current_position_side
         if side != self.state.position_side:
             self.state.position_side = side
             self.signals.position_changed.emit(side)
-        self.state.entry_price = pos.entry_price
+        # Entry price: engine carries the intended price for strategy-driven
+        # entries; for raw HUD clicks the engine stays FLAT so we fall back
+        # to the broker-verified fill from the position-and-entry watcher.
+        self.state.entry_price = pos.entry_price or (
+            rs.last_fill_price if side in ("long", "short") else None
+        )
         self.state.stop_price = pos.stop_price
         self.state.position_size = rs.position_size
         self.state.target_price = pos.target_price
@@ -416,9 +431,12 @@ class UiController(QObject):
         self.state.fill_price_source = rs.last_fill_price_source
         # Only compute PnL when we have a *verified* broker fill price.
         # When fill_price is None (ack succeeded but OCR couldn't verify), show "—".
+        # USD PnL scales with the open contract count so a 2-lot move reads 2x.
         if self.state.fill_price is not None and self.state.last_price is not None \
                 and side in ("long", "short"):
-            pts, usd = compute_pnl(self.state.fill_price, self.state.last_price, side)
+            contracts = max(1, self.state.position_size or 1)
+            pts, usd = compute_pnl(self.state.fill_price, self.state.last_price, side,
+                                   contracts=contracts)
             self.state.pnl_points = pts
             self.state.pnl_usd = usd
         else:

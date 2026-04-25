@@ -289,6 +289,233 @@ def test_position_watcher_size_zero_to_n_confirms_pending_entry():
     assert sup.state.position_size == 1
 
 
+def test_position_watcher_signed_size_positive_sets_long():
+    """Signed-size watcher: +1 means long."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+
+    sup._on_position_size_changed(1)
+
+    assert sup.state.current_position_side == "long"
+    assert sup.state.position_size == 1
+
+
+def test_position_watcher_signed_size_negative_sets_short():
+    """Signed-size watcher: -1 means short — no reliance on HUD click."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+
+    sup._on_position_size_changed(-2)
+
+    assert sup.state.current_position_side == "short"
+    assert sup.state.position_size == 2
+
+
+def test_position_watcher_broker_side_wins_over_manual_click():
+    """Sign of size wins even when last_manual_click_action disagrees — the
+    broker's state is ground truth. Mismatch is logged but not overridden."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    sup.state.last_manual_click_action = "BUY"   # user thought long
+    # but the broker actually shows a short (e.g. misclick landed on SELL)
+    sup._on_position_size_changed(-1)
+
+    assert sup.state.current_position_side == "short"
+
+
+def test_position_watcher_zero_clears_last_manual_click_action():
+    """On size -> 0 the stashed click action must be cleared so a later
+    unrelated open isn't mis-labelled with a stale direction."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    sup.state.last_manual_click_action = "BUY"
+    sup._on_position_size_changed(1)          # opens, side = long
+    sup._on_position_size_changed(0)          # closes
+
+    assert sup.state.current_position_side == "flat"
+    assert sup.state.last_manual_click_action is None
+
+
+def test_position_watcher_flip_long_to_short_syncs_everything():
+    """A direct long->short reversal (no flat between) must: flip side,
+    update size, clear the now-stale fill price, and sync the engine out
+    of its LONG state so the strategy doesn't think we're still long."""
+    engine = StrategyEngine(_strategy_cfg())
+    # Seed an open long in the engine and a verified fill in state.
+    engine.state.to_pending_entry("BUY", trigger_price=26680.0,
+                                  stop=26580.0, target=26780.0)
+    engine.confirm_entry_filled(26680.25)
+    assert engine.state.state == "LONG"
+
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    sup.state.position_size = 1
+    sup.state.current_position_side = "long"
+    sup.state.last_fill_price = 26680.25
+    sup.state.last_fill_price_source = "position_ocr"
+    sup.state.last_manual_click_action = "BUY"
+
+    sup._on_position_size_changed(-1)   # flipped to short
+
+    assert sup.state.current_position_side == "short"
+    assert sup.state.position_size == 1
+    assert sup.state.last_fill_price is None, \
+        "stale long-entry fill must be cleared on flip"
+    assert sup.state.last_fill_price_source is None
+    assert sup.state.last_manual_click_action is None, \
+        "BUY click intent is no longer current after flip"
+    assert engine.state.state == "FLAT", \
+        "engine must sync out of LONG on broker-side flip"
+
+
+def test_position_watcher_flip_short_to_long_syncs_everything():
+    engine = StrategyEngine(_strategy_cfg())
+    engine.state.to_pending_entry("SELL", trigger_price=26700.0,
+                                  stop=26800.0, target=26600.0)
+    engine.confirm_entry_filled(26700.00)
+    assert engine.state.state == "SHORT"
+
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    sup.state.position_size = 2
+    sup.state.current_position_side = "short"
+    sup.state.last_fill_price = 26700.00
+    sup.state.last_fill_price_source = "position_ocr"
+
+    sup._on_position_size_changed(1)   # flipped to long (smaller size)
+
+    assert sup.state.current_position_side == "long"
+    assert sup.state.position_size == 1
+    assert sup.state.last_fill_price is None
+    assert engine.state.state == "FLAT"
+
+
+def test_position_watcher_flip_invalidates_entry_price_watcher():
+    """If the entry-price watcher had already observed the NEW entry price
+    before the size flip fired, its internal cache matches the cell text —
+    so the fill-clear triggered by the flip would otherwise never recover.
+    The supervisor must poke the watcher so it re-emits on the next OCR."""
+    class _FakeEntryWatcher:
+        def __init__(self):
+            self.invalidated = 0
+        def invalidate(self):
+            self.invalidated += 1
+
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    fake = _FakeEntryWatcher()
+    sup._entry_price_watcher = fake  # type: ignore[assignment]
+    sup.state.position_size = 1
+    sup.state.current_position_side = "long"
+
+    sup._on_position_size_changed(-1)
+
+    assert fake.invalidated == 1
+
+
+def test_position_watcher_close_clears_fill_immediately():
+    """When size drops to 0, the fill must be cleared on the same tick —
+    don't make the HUD wait for the entry-price watcher to read a blank."""
+    engine = StrategyEngine(_strategy_cfg())
+    engine.state.to_pending_entry("BUY", trigger_price=100.0,
+                                  stop=95.0, target=110.0)
+    engine.confirm_entry_filled(100.0)
+
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    sup.state.position_size = 1
+    sup.state.current_position_side = "long"
+    sup.state.last_fill_price = 100.0
+    sup.state.last_fill_price_source = "position_ocr"
+
+    sup._on_position_size_changed(0)
+
+    assert sup.state.position_size == 0
+    assert sup.state.current_position_side == "flat"
+    assert sup.state.last_fill_price is None
+    assert sup.state.last_fill_price_source is None
+
+
+def test_position_watcher_scale_in_updates_size_without_engine_churn():
+    """Scaling from 1 -> 2 keeps us in-position; engine shouldn't transition."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+
+    sup._on_position_size_changed(1)
+    sup._on_position_size_changed(2)
+
+    assert sup.state.position_size == 2
+    assert sup.state.current_position_side == "long"
+
+
+def test_entry_price_watcher_sets_fill_with_source_tag():
+    """EntryPriceWatcher's handler writes the fill price + marks the
+    source as position_ocr so the HUD labels it '(verified)'."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+
+    sup._on_entry_price_changed(26680.25)
+
+    assert sup.state.last_fill_price == 26680.25
+    assert sup.state.last_fill_price_source == "position_ocr"
+
+
+def test_entry_price_watcher_none_clears_fill():
+    """None (blank/unparseable cell — typically because we're flat) must
+    clear any previously-captured fill so the HUD's PnL line flips to '—'."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup.state.last_fill_price = 26680.25
+    sup.state.last_fill_price_source = "position_ocr"
+
+    sup._on_entry_price_changed(None)
+
+    assert sup.state.last_fill_price is None
+    assert sup.state.last_fill_price_source is None
+
+
+def test_split_watchers_together_drive_long_with_verified_fill():
+    """End-to-end flow: size watcher fires +1 (long), then entry-price
+    watcher fires 26680.25. Combined state matches what the HUD needs
+    to render 'LONG @ 26680.25 size: 1 (verified)' with live PnL."""
+    engine = StrategyEngine(_strategy_cfg())
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+
+    sup._on_position_size_changed(1)
+    sup._on_entry_price_changed(26680.25)
+
+    assert sup.state.current_position_side == "long"
+    assert sup.state.position_size == 1
+    assert sup.state.last_fill_price == 26680.25
+    assert sup.state.last_fill_price_source == "position_ocr"
+
+
+def test_position_watcher_pending_entry_uses_last_fill_from_entry_watcher():
+    """When a strategy entry was pending AND the entry-price watcher has
+    already captured the fill, _on_position_size_changed(1) should confirm
+    the engine's entry with that fill price."""
+    engine = StrategyEngine(_strategy_cfg())
+    engine._last_accepted_price = 26600.0
+    engine.state.to_pending_entry("BUY", trigger_price=26600.0,
+                                  stop=26500.0, target=26800.0)
+
+    sup = _make_supervisor(FakeExecutor(), engine=engine)
+    sup._position_watcher = object()
+    # entry-price watcher fires first (racy in practice — fine either order)
+    sup._on_entry_price_changed(26680.25)
+    sup._on_position_size_changed(1)
+
+    assert engine.state.state == "LONG"
+    assert engine.state.position.entry_price == 26680.25
+
+
 def test_position_watcher_n_to_zero_closes_position_in_engine():
     """N -> 0 while engine is in-position drops it to FLAT."""
     engine = StrategyEngine(_strategy_cfg())
