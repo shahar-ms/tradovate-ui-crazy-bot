@@ -35,6 +35,7 @@ from app.utils.time_utils import now_ms, session_id
 from .event_bus import EventBus
 from .runtime_models import (ComponentHealth, CommandName, RuntimeCommand, RuntimeMode,
                              RuntimeState)
+from .trade_journal import TradeJournal
 from .watchdogs import (WatchdogConfig, anchor_watchdog, execution_watchdog,
                         first_halt_reason, price_watchdog, queue_watchdog)
 
@@ -47,6 +48,11 @@ class SupervisorDeps:
     screen_map: ScreenMap
     executor: Executor
     engine: StrategyEngine
+    # Optional: when wired, the supervisor reports every position state
+    # change so completed trades are recorded to the journal's in-memory
+    # session list AND its SQLite store. Tests can pass an in-memory
+    # journal; production passes a file-backed one from bootstrap.
+    journal: Optional[TradeJournal] = None
 
 
 class Supervisor:
@@ -491,6 +497,8 @@ class Supervisor:
                 # of lagging until the entry-price watcher sees a blank cell.
                 self.state.last_fill_price = None
                 self.state.last_fill_price_source = None
+
+            self._notify_journal()
         except Exception:
             log.exception("position size handler failed")
 
@@ -504,8 +512,28 @@ class Supervisor:
             self.state.last_fill_price_source = (
                 "position_ocr" if price is not None else None
             )
+            self._notify_journal()
         except Exception:
             log.exception("entry price handler failed")
+
+    def _notify_journal(self) -> None:
+        """Push the current position state to the TradeJournal, if wired.
+        Called at the end of both _on_position_size_changed and
+        _on_entry_price_changed so the journal sees a coherent snapshot
+        regardless of which watcher fired."""
+        journal = self.deps.journal
+        if journal is None:
+            return
+        try:
+            journal.position_observed(
+                side=self.state.current_position_side,
+                size=self.state.position_size or 0,
+                fill_price=self.state.last_fill_price,
+                last_price=self.state.last_price,
+                ts_ms=now_ms(),
+            )
+        except Exception:
+            log.exception("trade journal hook failed")
 
     def _to_execution_intent(self, intent: SignalIntent) -> Optional[ExecutionIntent]:
         a = intent.action

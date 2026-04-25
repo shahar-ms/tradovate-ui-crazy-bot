@@ -98,11 +98,26 @@ class UiController(QObject):
         # a click-flash overlay can show where the bot just pressed.
         br.executor.on_click = lambda x, y: self.signals.click_dispatched.emit(x, y)
 
+        # Trade journal: SQLite-backed history of completed trades, plus
+        # an in-memory list the HUD reads. One file across all sessions
+        # (offline analysis); session_id tags rows so we can filter later.
+        from app.orchestrator.trade_journal import TradeJournal
+        from app.utils import paths as _paths
+        try:
+            journal = TradeJournal(
+                db_path=_paths.state_dir() / "trades.sqlite",
+                session_id=br.starting_state.session_id,
+            )
+        except Exception:
+            log.exception("failed to open TradeJournal — continuing without persistence")
+            journal = None
+
         deps = SupervisorDeps(
             bot_cfg=br.bot_cfg,
             screen_map=br.screen_map,
             executor=br.executor,
             engine=br.engine,
+            journal=journal,
         )
         self._supervisor = Supervisor(deps=deps, state=br.starting_state)
         self._supervisor.start()
@@ -134,6 +149,14 @@ class UiController(QObject):
                 self._supervisor.stop(timeout=3.0)
             except Exception:
                 log.exception("supervisor.stop raised")
+            # Close the SQLite journal cleanly so its commit + connection
+            # don't leak across restarts (Setup -> reload).
+            journal = self._supervisor.deps.journal
+            if journal is not None:
+                try:
+                    journal.close()
+                except Exception:
+                    log.exception("journal.close raised")
             self._supervisor = None
         self.state.mode = "DISCONNECTED"
         self.state.armed = False
@@ -447,6 +470,14 @@ class UiController(QObject):
         self.state.last_ack_status = rs.last_ack_status
         self.state.last_ack_ts_ms = rs.last_execution_ack_ts_ms
         self.state.consecutive_unknown_acks = sup.deps.executor.consecutive_unknown_acks
+
+        # mirror this-session trade history so the HUD's bottom list can
+        # render without cross-thread coupling to the journal.
+        journal = sup.deps.journal
+        if journal is not None:
+            # cheap copy: the list is appended-to, never mutated, so a
+            # shallow slice is safe even with concurrent journal writes.
+            self.state.recent_trades = list(journal.session_trades)
 
         # uptime
         if self._started_at_ms:

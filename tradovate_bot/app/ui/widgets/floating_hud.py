@@ -32,8 +32,9 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QGuiApplication, QMouseEvent
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMenu, QPushButton,
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QMouseEvent
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QListWidget,
+                               QListWidgetItem, QMenu, QPushButton,
                                QStackedWidget, QVBoxLayout, QWidget)
 
 from app.ui.app_signals import AppSignals
@@ -45,8 +46,13 @@ from app.utils import paths
 
 log = logging.getLogger(__name__)
 
+
+def _q_color(hex_or_name: str) -> QColor:
+    return QColor(hex_or_name)
+
+
 HUD_WIDTH = 330
-HUD_HEIGHT = 440
+HUD_HEIGHT = 560        # taller than before to fit the session trade list
 HUD_COMPACT_WIDTH = 320
 HUD_COMPACT_HEIGHT = 46
 HUD_LEFT_MARGIN = 20
@@ -233,8 +239,13 @@ class FloatingHud(QWidget):
         row7.setSpacing(4)
         self._halt_btn = self._make_button("HALT", role="halt", small=True)
         self._setup_btn = self._make_button("Setup", small=True)
+        self._exit_btn = self._make_button("Exit", role="exit", small=True)
+        self._exit_btn.setToolTip(
+            "Quit the bot. Returns to the run.bat menu when launched from there."
+        )
         row7.addWidget(self._halt_btn)
         row7.addWidget(self._setup_btn)
+        row7.addWidget(self._exit_btn)
         root.addLayout(row7)
 
         # separator
@@ -278,6 +289,41 @@ class FloatingHud(QWidget):
         self._toast_lbl.setWordWrap(True)
         self._toast_lbl.setVisible(False)
         root.addWidget(self._toast_lbl)
+
+        # separator
+        root.addWidget(self._sep())
+
+        # trade list — closed trades since the app opened. Each row:
+        #   "BUY/SELL  size  entry → exit   +/-pts  +/-$"
+        trades_header_row = QHBoxLayout()
+        trades_header_row.setSpacing(6)
+        self._trades_header = QLabel("Trades (this session)")
+        self._trades_header.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px; letter-spacing: 1px;"
+        )
+        trades_header_row.addWidget(self._trades_header)
+        trades_header_row.addStretch(1)
+        self._trades_total_lbl = QLabel("0 trades  •  $0.00")
+        self._trades_total_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px; font-weight: 600;"
+        )
+        trades_header_row.addWidget(self._trades_total_lbl)
+        root.addLayout(trades_header_row)
+
+        self._trades_list = QListWidget()
+        self._trades_list.setFocusPolicy(Qt.NoFocus)
+        self._trades_list.setStyleSheet(
+            f"QListWidget {{ background-color: {PANEL_ALT}; "
+            f"   border: 1px solid {BORDER}; border-radius: 4px; "
+            f"   font-family: Consolas, 'Courier New', monospace; "
+            f"   font-size: 10px; padding: 2px; }}"
+            f"QListWidget::item {{ padding: 1px 2px; }}"
+        )
+        self._trades_list.setFixedHeight(110)
+        root.addWidget(self._trades_list)
+        # Snapshot the last-rendered ids so _refresh_all only repaints the
+        # list when the journal actually grew (cheap shortcut).
+        self._last_trade_count: int = 0
 
         root.addStretch(1)
 
@@ -389,6 +435,8 @@ class FloatingHud(QWidget):
             QPushButton[role="cancel"]  {{ background-color: {CANCEL_YELLOW}; color: #101010; font-weight: 700; border: none; }}
             QPushButton[role="arm"]     {{ background-color: {ARM_ORANGE}; color: #101010; font-weight: 700; border: none; }}
             QPushButton[role="halt"]    {{ background-color: {BROKEN_RED}; color: white; font-weight: 700; border: none; }}
+            QPushButton[role="exit"]    {{ background-color: {INACTIVE_GRAY}; color: #0b0b0b; font-weight: 700; border: none; }}
+            QPushButton[role="exit"]:hover {{ background-color: #b8b8b8; }}
             """
         )
 
@@ -400,6 +448,7 @@ class FloatingHud(QWidget):
         self._halt_btn.clicked.connect(self._on_halt)
         self._setup_btn.clicked.connect(self.setup_requested.emit)
         self._bot_toggle_btn.clicked.connect(self._on_bot_toggle)
+        self._exit_btn.clicked.connect(self._on_exit)
 
         # signals from the bus
         self.signals.price_updated.connect(lambda _t: self._refresh_all())
@@ -650,8 +699,52 @@ class FloatingHud(QWidget):
         self._bot_toggle_btn.style().polish(self._bot_toggle_btn)
         self._bot_toggle_btn.setEnabled(running and not halted)
 
+        # --- session trade list --- #
+        self._refresh_trades_list(s)
+
         # --- keep the compact view in sync too --- #
         self._refresh_compact(s)
+
+    def _refresh_trades_list(self, s: UiState) -> None:
+        """Repopulate the bottom trade list whenever the journal grew.
+        Each row: 'L 1 26680.00→26700.50 +20.50p +$41.00' (color-coded).
+        Header total updates regardless so it reflects partial scroll-back."""
+        trades = list(s.recent_trades)  # local snapshot
+        # Header: count + cumulative session PnL.
+        total_usd = sum(t.pnl_usd for t in trades) if trades else 0.0
+        total_color = (OK_GREEN if total_usd > 0 else
+                       BROKEN_RED if total_usd < 0 else TEXT_MUTED)
+        self._trades_total_lbl.setText(
+            f"{len(trades)} trade{'s' if len(trades) != 1 else ''}  •  {total_usd:+.2f}"
+        )
+        self._trades_total_lbl.setStyleSheet(
+            f"color: {total_color}; font-size: 10px; font-weight: 600;"
+        )
+
+        if len(trades) == self._last_trade_count:
+            return  # nothing new
+        self._last_trade_count = len(trades)
+
+        self._trades_list.clear()
+        if not trades:
+            placeholder = QListWidgetItem(
+                "no closed trades yet — they'll appear here as you trade"
+            )
+            placeholder.setFlags(placeholder.flags() & ~Qt.ItemIsSelectable)
+            self._trades_list.addItem(placeholder)
+            return
+
+        # newest first so the operator sees their last trade at the top.
+        for t in reversed(trades):
+            tag = "L" if t.side == "long" else "S"
+            line = (f"{tag} {t.max_size}  "
+                    f"{t.entry_price:.2f}→{t.exit_price:.2f}  "
+                    f"{t.pnl_points:+.2f}p  {t.pnl_usd:+.2f}")
+            item = QListWidgetItem(line)
+            color = OK_GREEN if t.pnl_usd > 0 else BROKEN_RED if t.pnl_usd < 0 else TEXT_MUTED
+            item.setForeground(_q_color(color))
+            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            self._trades_list.addItem(item)
 
     def _refresh_compact(self, s: UiState) -> None:
         """Keep the minimized block's labels up to date."""
@@ -756,6 +849,20 @@ class FloatingHud(QWidget):
         err = self.controller.turn_off() if bot_is_on else self.controller.turn_on()
         if err:
             self._show_toast(err)
+
+    def _on_exit(self) -> None:
+        """Quit the whole app. When launched from run.bat, control returns
+        to the batch menu; when launched from the demo runner, both the
+        HUD and the demo panel close. Saves HUD position first so the
+        next launch lands where the operator left it."""
+        from PySide6.QtWidgets import QApplication
+        self.save_position()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+        else:
+            # No QApplication (e.g. unit-test harness) — fall back to close()
+            self.close()
 
     @Slot(str)
     def _show_toast(self, message: str) -> None:

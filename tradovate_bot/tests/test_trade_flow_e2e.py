@@ -21,9 +21,16 @@ import pytest
 
 from app.orchestrator.supervisor import Supervisor
 from app.orchestrator.trade_flow import TradeFlow
+from app.orchestrator.trade_journal import TradeJournal
 from app.strategy.engine import StrategyEngine
 
 from .test_supervisor import FakeExecutor, _make_supervisor, _strategy_cfg
+
+
+def _make_supervisor_with_journal() -> tuple[Supervisor, TradeJournal]:
+    journal = TradeJournal(db_path=":memory:", session_id="e2e-test")
+    sup = _make_supervisor(FakeExecutor(), journal=journal)
+    return sup, journal
 
 # Lazy/optional Qt imports — only the HUD-driven tests need them, and the
 # rest of this file should still run if Qt is unavailable for any reason.
@@ -45,22 +52,39 @@ from app.ui.ui_state import UiState                             # noqa: E402
 
 
 def test_e2e_long_winning_trade():
-    """Long 1 contract @ 26680.00, runs up to 26700.50, manual close.
-    Expected realized PnL: +20.50 pts * $2/pt * 1 = $41.00 USD (MNQ)."""
+    """Long 1 contract @ 26680.00 with a real-feeling price path: we go
+    UNDERWATER first (drawdown), recover through breakeven, then run up
+    to a profitable exit. Final realized PnL: +20.50 pts * $2/pt * 1 =
+    +$41.00 USD (MNQ). The interesting bit is the negative-PnL phase —
+    we assert the HUD sees a red drawdown before the green close."""
     sup = _make_supervisor(FakeExecutor())
     flow = TradeFlow(sup)
 
-    # Pre-trade tick — sanity check that flat state has no PnL.
     flow.tick(26680.00)
     assert flow.latest.side == "flat"
     assert flow.latest.pnl_usd is None
 
-    # Broker fills the BUY.
     flow.open("long", entry=26680.00, size=1)
     assert flow.latest.side == "long"
     assert flow.latest.fill == 26680.00
+    assert flow.latest.pnl_points == pytest.approx(0.00)
 
-    # Price ticks during the trade — unrealized PnL should track linearly.
+    # ---- drawdown leg: price drops AGAINST our long ---- #
+    flow.tick(26674.50)
+    assert flow.latest.pnl_points == pytest.approx(-5.50)
+    assert flow.latest.pnl_usd == pytest.approx(-11.00)
+    assert flow.latest.pnl_usd < 0, "drawdown phase must show negative PnL"
+
+    flow.tick(26668.25)            # max adverse excursion
+    assert flow.latest.pnl_points == pytest.approx(-11.75)
+    assert flow.latest.pnl_usd == pytest.approx(-23.50)
+
+    # ---- recovery: back through breakeven ---- #
+    flow.tick(26680.00)
+    assert flow.latest.pnl_points == pytest.approx(0.00)
+    assert flow.latest.pnl_usd == pytest.approx(0.00)
+
+    # ---- profit leg ---- #
     flow.tick(26690.00)
     assert flow.latest.pnl_points == pytest.approx(10.00)
     assert flow.latest.pnl_usd == pytest.approx(20.00)
@@ -69,21 +93,54 @@ def test_e2e_long_winning_trade():
     assert flow.latest.pnl_points == pytest.approx(20.50)
     assert flow.latest.pnl_usd == pytest.approx(41.00)
 
-    # Close at the last tick price.
+    # Sanity: across the trade we touched both signs of unrealized PnL.
+    pnls = [s.pnl_usd for s in flow.snapshots if s.pnl_usd is not None]
+    assert min(pnls) < 0 and max(pnls) > 0, \
+        "winning trade should still cross negative territory en route"
+
     flow.close()
     assert flow.latest.side == "flat"
     assert flow.latest.fill is None
     assert flow.latest.pnl_usd is None, "PnL line must hide on flat"
 
-    # Realized PnL = the unrealized at the last in-position snapshot.
     pts, usd = flow.realized_pnl()
     assert pts == pytest.approx(20.50)
     assert usd == pytest.approx(41.00)
 
 
+def test_e2e_long_winning_trade_records_one_journal_row():
+    """Same long-winner shape as above, but with a journal wired so we
+    verify exactly one TradeRecord lands in session_trades AND in SQLite."""
+    sup, journal = _make_supervisor_with_journal()
+    flow = TradeFlow(sup)
+
+    flow.tick(26680.00)
+    flow.open("long", entry=26680.00, size=1)
+    flow.tick(26674.50)         # drawdown
+    flow.tick(26680.00)
+    flow.tick(26700.50)         # exit price
+    flow.close()
+
+    assert journal.session_count() == 1
+    rec = journal.session_trades[0]
+    assert rec.side == "long"
+    assert rec.entry_price == pytest.approx(26680.00)
+    assert rec.exit_price == pytest.approx(26700.50)
+    assert rec.max_size == 1
+    assert rec.pnl_points == pytest.approx(20.50)
+    assert rec.pnl_usd == pytest.approx(41.00)
+    # SQLite roundtrip — same trade appears when read back from disk.
+    [from_db] = journal.all_trades()
+    assert from_db.pnl_usd == rec.pnl_usd
+    assert from_db.session_id == "e2e-test"
+
+
 def test_e2e_short_losing_trade():
-    """Short 2 contracts @ 26700.00, market runs against us to 26710.25,
-    manual close. Expected realized PnL: -10.25 pts * $2/pt * 2 = -$41.00."""
+    """Short 2 contracts @ 26700.00 with a real-feeling price path: price
+    DROPS in our favor first (we look like winners briefly), then rallies
+    against us through breakeven and stops out at a loss. Final realized
+    PnL: -10.25 pts * $2/pt * 2 = -$41.00 USD. Asserts that the HUD
+    showed positive PnL at the favorable peak before the eventual loss."""
     sup = _make_supervisor(FakeExecutor())
     flow = TradeFlow(sup)
 
@@ -93,19 +150,86 @@ def test_e2e_short_losing_trade():
     assert flow.latest.size == 2
     assert flow.latest.pnl_points == pytest.approx(0.00)
 
-    # Adverse moves on a short = positive price deltas = negative PnL.
+    # ---- favorable leg: short profits as price drops ---- #
+    flow.tick(26695.50)
+    assert flow.latest.pnl_points == pytest.approx(4.50)
+    assert flow.latest.pnl_usd == pytest.approx(18.00)        # 2 contracts
+    assert flow.latest.pnl_usd > 0, "short should show profit while price drops"
+
+    flow.tick(26692.00)            # max favorable excursion
+    assert flow.latest.pnl_points == pytest.approx(8.00)
+    assert flow.latest.pnl_usd == pytest.approx(32.00)
+
+    # ---- reversal: back through breakeven ---- #
+    flow.tick(26700.00)
+    assert flow.latest.pnl_points == pytest.approx(0.00)
+    assert flow.latest.pnl_usd == pytest.approx(0.00)
+
+    # ---- adverse leg: rally against the short ---- #
     flow.tick(26705.00)
     assert flow.latest.pnl_points == pytest.approx(-5.00)
-    assert flow.latest.pnl_usd == pytest.approx(-20.00)   # 2 contracts
+    assert flow.latest.pnl_usd == pytest.approx(-20.00)
 
     flow.tick(26710.25)
     assert flow.latest.pnl_points == pytest.approx(-10.25)
     assert flow.latest.pnl_usd == pytest.approx(-41.00)
 
+    pnls = [s.pnl_usd for s in flow.snapshots if s.pnl_usd is not None]
+    assert max(pnls) > 0 and min(pnls) < 0, \
+        "losing trade should still touch positive territory before stopping out"
+
     flow.close()
     pts, usd = flow.realized_pnl()
     assert pts == pytest.approx(-10.25)
     assert usd == pytest.approx(-41.00)
+
+
+def test_e2e_short_losing_trade_records_one_journal_row():
+    """Loss path also lands one row, with negative PnL preserved."""
+    sup, journal = _make_supervisor_with_journal()
+    flow = TradeFlow(sup)
+
+    flow.tick(26700.00)
+    flow.open("short", entry=26700.00, size=2)
+    flow.tick(26695.50)         # favorable peak
+    flow.tick(26710.25)         # exit price
+    flow.close()
+
+    assert journal.session_count() == 1
+    rec = journal.session_trades[0]
+    assert rec.side == "short"
+    assert rec.entry_price == pytest.approx(26700.00)
+    assert rec.exit_price == pytest.approx(26710.25)
+    assert rec.max_size == 2
+    assert rec.pnl_points == pytest.approx(-10.25)
+    assert rec.pnl_usd == pytest.approx(-41.00)
+
+
+def test_e2e_two_back_to_back_trades_accumulate_in_journal():
+    """Sequential trades within a single session — both should land,
+    in order, with cumulative PnL retrievable via session_trades."""
+    sup, journal = _make_supervisor_with_journal()
+    flow = TradeFlow(sup)
+
+    # Trade 1: long winner
+    flow.tick(26680.00)
+    flow.open("long", entry=26680.00, size=1)
+    flow.tick(26690.00)
+    flow.close()
+
+    # Trade 2: short loser
+    flow.tick(26690.00)
+    flow.open("short", entry=26690.00, size=1)
+    flow.tick(26700.00)
+    flow.close()
+
+    assert journal.session_count() == 2
+    t1, t2 = journal.session_trades
+    assert t1.side == "long" and t1.pnl_points == pytest.approx(10.0)
+    assert t2.side == "short" and t2.pnl_points == pytest.approx(-10.0)
+    # cumulative session PnL = +$20 + (-$20) = $0
+    cumulative = sum(t.pnl_usd for t in journal.session_trades)
+    assert cumulative == pytest.approx(0.0)
 
 
 def test_e2e_long_winning_trade_with_strategy_pending_entry():
@@ -235,10 +359,16 @@ def test_e2e_hud_buy_click_drives_long_winning_trade(qtbot, monkeypatch):
     flow.open("long", entry=26680.00, size=1)
     assert flow.latest.side == "long"
 
-    # Live ticks during the trade.
+    # Realistic path: drawdown first, recover, then run to profit.
+    flow.tick(26672.00)
+    assert flow.latest.pnl_usd == pytest.approx(-16.00)
     flow.tick(26690.00)
     flow.tick(26700.50)
     assert flow.latest.pnl_points == pytest.approx(20.50)
+
+    pnls = [s.pnl_usd for s in flow.snapshots if s.pnl_usd is not None]
+    assert min(pnls) < 0 and max(pnls) > 0, \
+        "winning trade should cross both signs en route"
 
     # Operator presses CANCEL ALL on the HUD to flatten.
     flow.hud_click("CANCEL_ALL")
@@ -267,8 +397,16 @@ def test_e2e_hud_sell_click_drives_short_losing_trade(qtbot, monkeypatch):
     assert sup.state.last_manual_click_action == "SELL"
 
     flow.open("short", entry=26700.00, size=1)
-    flow.tick(26715.25)             # adverse for a short
+    # Favorable first (short profits as price drops), then reversal to a
+    # losing exit.
+    flow.tick(26694.00)
+    assert flow.latest.pnl_usd == pytest.approx(12.00)   # short in profit
+    flow.tick(26715.25)             # adverse rally past entry
     assert flow.latest.pnl_points == pytest.approx(-15.25)
+
+    pnls = [s.pnl_usd for s in flow.snapshots if s.pnl_usd is not None]
+    assert max(pnls) > 0 and min(pnls) < 0, \
+        "losing trade should touch positive territory before stopping out"
 
     flow.hud_click("CANCEL_ALL")
     flow.close()

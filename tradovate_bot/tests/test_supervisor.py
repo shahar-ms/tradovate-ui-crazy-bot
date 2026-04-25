@@ -82,13 +82,14 @@ def _strategy_cfg() -> StrategyConfig:
     )
 
 
-def _make_supervisor(executor, engine=None) -> Supervisor:
+def _make_supervisor(executor, engine=None, journal=None) -> Supervisor:
     engine = engine or StrategyEngine(_strategy_cfg())
     deps = SupervisorDeps(
         bot_cfg=_bot_cfg(),
         screen_map=_screen_map(),
         executor=executor,
         engine=engine,
+        journal=journal,
     )
     state = RuntimeState(mode="PAPER", armed=False)
     return Supervisor(deps=deps, state=state)

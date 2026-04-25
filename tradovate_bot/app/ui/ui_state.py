@@ -8,7 +8,10 @@ from UiState on paint — they never block waiting on workers.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.orchestrator.trade_journal import TradeRecord
 
 
 @dataclass
@@ -80,6 +83,11 @@ class UiState:
 
     # ring buffer of recent events for the dashboard
     recent_events: list[dict] = field(default_factory=list)
+
+    # Trades completed during this app session, oldest first. Mirrors the
+    # TradeJournal's session list so the HUD has something to render
+    # without crossing the threading boundary directly.
+    recent_trades: list["TradeRecord"] = field(default_factory=list)
 
     RECENT_EVENTS_MAX: int = 200
 

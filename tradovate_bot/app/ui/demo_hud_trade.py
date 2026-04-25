@@ -39,6 +39,7 @@ from app.models.config import BotConfig, StrategyConfig
 from app.orchestrator.runtime_models import RuntimeState
 from app.orchestrator.supervisor import Supervisor, SupervisorDeps
 from app.orchestrator.trade_flow import TradeFlow
+from app.orchestrator.trade_journal import TradeJournal
 from app.strategy.engine import StrategyEngine
 from app.ui.app_signals import AppSignals
 from app.ui.controller import UiController
@@ -99,13 +100,18 @@ def _demo_screen_map() -> ScreenMap:
 
 
 def _build_demo_supervisor() -> Supervisor:
+    state = RuntimeState(mode="PAPER", armed=True, session_id="demo")
+    # In-memory SQLite for the demo so completed scenarios land in the
+    # HUD's trade list AND we exercise the same persistence path the
+    # production bot uses — but without polluting trades.sqlite.
+    journal = TradeJournal(db_path=":memory:", session_id=state.session_id)
     deps = SupervisorDeps(
         bot_cfg=BotConfig(preprocess_recipes=["gray_only"]),
         screen_map=_demo_screen_map(),
         executor=_NoopExecutor(),  # type: ignore[arg-type]
         engine=StrategyEngine(StrategyConfig()),
+        journal=journal,
     )
-    state = RuntimeState(mode="PAPER", armed=True)
     return Supervisor(deps=deps, state=state)
 
 
@@ -124,29 +130,37 @@ class _Step:
 
 
 def _scenario_long_win() -> tuple[str, list[_Step]]:
-    return "Long winning trade (1 contract +20.5 pts → +$41)", [
-        _Step(0,    "tick 26680.00 (pre-trade)",   lambda f: f.tick(26680.00)),
-        _Step(800,  "HUD click: BUY",              lambda f: f.hud_click("BUY")),
-        _Step(1700, "broker fills LONG 1 @ 26680", lambda f: f.open("long", 26680.00, 1)),
-        _Step(3000, "tick 26685.00",               lambda f: f.tick(26685.00)),
-        _Step(4200, "tick 26690.00",               lambda f: f.tick(26690.00)),
-        _Step(5400, "tick 26695.00",               lambda f: f.tick(26695.00)),
-        _Step(6600, "tick 26700.50 (peak)",        lambda f: f.tick(26700.50)),
-        _Step(8000, "HUD click: CANCEL ALL",       lambda f: f.hud_click("CANCEL_ALL")),
-        _Step(8800, "broker closes (size→0)",      lambda f: f.close()),
+    """Realistic-ish path: open long, go UNDERWATER first, recover through
+    breakeven, run to profit. Lets you SEE the HUD's PnL flip red, back to
+    flat, then green before the close."""
+    return "Long winning (drawdown then recovery → +$41)", [
+        _Step(0,    "tick 26680.00 (pre-trade)",      lambda f: f.tick(26680.00)),
+        _Step(800,  "HUD click: BUY",                 lambda f: f.hud_click("BUY")),
+        _Step(1700, "broker fills LONG 1 @ 26680",    lambda f: f.open("long", 26680.00, 1)),
+        _Step(3000, "tick 26674.50 (drawdown −$11)",  lambda f: f.tick(26674.50)),
+        _Step(4200, "tick 26668.25 (max DD −$23.50)", lambda f: f.tick(26668.25)),
+        _Step(5400, "tick 26680.00 (back to BE)",     lambda f: f.tick(26680.00)),
+        _Step(6600, "tick 26690.00 (+$20)",           lambda f: f.tick(26690.00)),
+        _Step(7800, "tick 26700.50 (peak +$41)",      lambda f: f.tick(26700.50)),
+        _Step(9200, "HUD click: CANCEL ALL",          lambda f: f.hud_click("CANCEL_ALL")),
+        _Step(10000, "broker closes (size→0)",        lambda f: f.close()),
     ]
 
 
 def _scenario_short_loss() -> tuple[str, list[_Step]]:
-    return "Short losing trade (2 contracts −10.25 pts → −$41)", [
-        _Step(0,    "tick 26700.00",                lambda f: f.tick(26700.00)),
-        _Step(800,  "HUD click: SELL",              lambda f: f.hud_click("SELL")),
-        _Step(1700, "broker fills SHORT 2 @ 26700", lambda f: f.open("short", 26700.00, 2)),
-        _Step(3000, "tick 26705.00 (adverse)",      lambda f: f.tick(26705.00)),
-        _Step(4200, "tick 26708.00",                lambda f: f.tick(26708.00)),
-        _Step(5400, "tick 26710.25 (drawdown)",     lambda f: f.tick(26710.25)),
-        _Step(6800, "HUD click: CANCEL ALL",        lambda f: f.hud_click("CANCEL_ALL")),
-        _Step(7600, "broker closes (size→0)",       lambda f: f.close()),
+    """Open short, price drops in our favor first (we look like winners),
+    then rallies against us through breakeven and stops out at a loss."""
+    return "Short losing (favorable first, then stops out → −$41)", [
+        _Step(0,    "tick 26700.00",                    lambda f: f.tick(26700.00)),
+        _Step(800,  "HUD click: SELL",                  lambda f: f.hud_click("SELL")),
+        _Step(1700, "broker fills SHORT 2 @ 26700",     lambda f: f.open("short", 26700.00, 2)),
+        _Step(3000, "tick 26695.50 (+$18 favorable)",   lambda f: f.tick(26695.50)),
+        _Step(4200, "tick 26692.00 (peak +$32)",        lambda f: f.tick(26692.00)),
+        _Step(5400, "tick 26700.00 (back to BE)",       lambda f: f.tick(26700.00)),
+        _Step(6600, "tick 26705.00 (rally −$20)",       lambda f: f.tick(26705.00)),
+        _Step(7800, "tick 26710.25 (stops out −$41)",   lambda f: f.tick(26710.25)),
+        _Step(9200, "HUD click: CANCEL ALL",            lambda f: f.hud_click("CANCEL_ALL")),
+        _Step(10000, "broker closes (size→0)",          lambda f: f.close()),
     ]
 
 

@@ -531,10 +531,30 @@ def test_hud_cal_indicator_reflects_calibration_state(qtbot):
 
 
 def test_hud_has_no_close_x_button(qtbot):
-    """User explicitly asked for the X to be removed from the HUD."""
+    """The corner-X close button is intentionally absent. Quitting goes
+    through the explicit Exit button in row 7 (or right-click > Exit)."""
     hud, _, _ = _build_hud(qtbot)
     assert not hasattr(hud, "_close_btn"), \
-        "_close_btn should have been removed — close via right-click > Exit app"
+        "_close_btn should have been removed — close via Exit button"
+
+
+def test_hud_exit_button_quits_app(qtbot, monkeypatch):
+    """The Exit button must call QApplication.quit() so run.bat can
+    return to the batch menu. Save-position is also exercised on the way
+    out so the next launch lands in the same spot."""
+    hud, _, _ = _build_hud(qtbot)
+
+    quit_calls = []
+    save_calls = []
+    from PySide6.QtWidgets import QApplication
+    monkeypatch.setattr(QApplication.instance(), "quit",
+                        lambda: quit_calls.append(True))
+    monkeypatch.setattr(hud, "save_position",
+                        lambda: save_calls.append(True))
+
+    hud._exit_btn.click()
+    assert quit_calls == [True], "Exit must call QApplication.quit()"
+    assert save_calls == [True], "Exit must persist the HUD position first"
 
 
 def test_hud_saves_minimized_flag(qtbot, tmp_path, monkeypatch):
