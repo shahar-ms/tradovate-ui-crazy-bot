@@ -58,3 +58,37 @@ def test_validator_rejects_missing_parse():
     ver = v.check(None, confidence=95.0, prev_accepted=None)
     assert not ver.accepted
     assert ver.reason == "parse_failed"
+
+
+# ----- adaptive confidence floor: confirming reads ----- #
+
+
+def test_validator_accepts_same_value_below_strict_floor():
+    """If the parsed price matches the last accepted price, a confidence
+    read just below the strict floor is still acceptable — cross-frame
+    agreement is strong validation on its own. Critical for static
+    markets where Tradovate's cell anti-aliasing puts conf in the 60s."""
+    v = PriceValidator(min_confidence=70.0)
+    # 65 < 70 (strict floor), but 65 >= 70 * 0.7 = 49 (soft floor).
+    ver = v.check(27440.75, confidence=65.0, prev_accepted=27440.75)
+    assert ver.accepted, f"confirming read should pass soft floor; got {ver.reason}"
+    assert ver.value == 27440.75
+
+
+def test_validator_rejects_novel_value_below_strict_floor():
+    """First sighting of a new price still requires the full confidence
+    floor — no soft path for values we haven't anchored to yet."""
+    v = PriceValidator(min_confidence=70.0)
+    ver = v.check(27440.75, confidence=65.0, prev_accepted=27435.00)
+    assert not ver.accepted
+    assert "low_confidence" in (ver.reason or "")
+
+
+def test_validator_rejects_confirming_read_below_soft_floor():
+    """The soft floor still has teeth — pure-noise low-confidence reads
+    don't get accepted just because they happen to match by coincidence."""
+    v = PriceValidator(min_confidence=70.0)
+    # 30 is well below 70*0.7=49.
+    ver = v.check(27440.75, confidence=30.0, prev_accepted=27440.75)
+    assert not ver.accepted
+    assert "low_confidence" in (ver.reason or "")

@@ -100,6 +100,18 @@ class CalibrationPage(QWidget):
         self._monitor_index: int = 1
         self._monitor_size: tuple[int, int] = (0, 0)
         self._current_item_key: Optional[str] = None
+        # Items the operator has temporarily hidden from the canvas via the
+        # checkbox in the items list. Lets you mark new regions on top of /
+        # near existing ones without the existing rectangles obscuring the
+        # area. Marked-but-hidden items still exist in `targets` and will
+        # save normally — only the overlay drawing is skipped.
+        self._hidden_keys: set[str] = set()
+        # Set during _refresh_items_list so the itemChanged signal fired
+        # while we set check states doesn't recurse into the toggle handler.
+        self._refreshing_list: bool = False
+        # Guards two-way sync between the items_list selection and the
+        # 'Mark:' combo so they don't ping-pong each other infinitely.
+        self._syncing_selection: bool = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
@@ -150,6 +162,9 @@ class CalibrationPage(QWidget):
         self.item_combo = QComboBox()
         for key, _kind, label, _color, required in ITEMS:
             self.item_combo.addItem(f"{label}{'' if required else ' (opt)'}", userData=key)
+        # Two-way sync: changing the combo highlights the matching row in
+        # the items_list on the right (and vice versa, wired below).
+        self.item_combo.currentIndexChanged.connect(self._on_combo_changed)
         mark_row.addWidget(self.item_combo)
 
         self.btn_start_mark = QPushButton("Start mark")
@@ -187,9 +202,15 @@ class CalibrationPage(QWidget):
             status_panel.add(w)
         right_lay.addWidget(status_panel)
 
-        items_panel = Panel("Marked items  (click a row + 'Clear selected item' to remove)")
+        items_panel = Panel(
+            "Marked items  (toggle ☐ to hide overlay; double-click to re-mark)"
+        )
         self.items_list = QListWidget()
         self.items_list.itemDoubleClicked.connect(self._on_items_double_clicked)
+        self.items_list.itemChanged.connect(self._on_item_visibility_toggled)
+        # Two-way sync: selecting a row syncs the 'Mark:' combo, and
+        # changing the combo selects the matching row in this list.
+        self.items_list.currentItemChanged.connect(self._on_items_selection_changed)
         items_panel.add(self.items_list)
         right_lay.addWidget(items_panel, 1)
 
@@ -536,6 +557,7 @@ class CalibrationPage(QWidget):
         self._image_source = "none"
         self._monitor_size = (0, 0)
         self.targets = CalibTargets()
+        self._hidden_keys.clear()
         self.canvas.clear_image()
         self._redraw_overlays()
         self._refresh_items_list()
@@ -580,6 +602,7 @@ class CalibrationPage(QWidget):
                                     f"'{label}' is already empty.")
             return
         setattr(self.targets, key, None)
+        self._hidden_keys.discard(key)
         self._redraw_overlays()
         self._refresh_items_list()
         emit_event(self.signals, "info", "calibration", f"cleared {label}")
@@ -611,6 +634,9 @@ class CalibrationPage(QWidget):
             return
         setattr(self.targets, self._current_item_key,
                 Region(left=left, top=top, width=width, height=height))
+        # A fresh mark should be visible by default — drop any prior
+        # hide-toggle on this key.
+        self._hidden_keys.discard(self._current_item_key)
         self._auto_select_after_mark(self._current_item_key)
         self._current_item_key = None
         self._redraw_overlays()
@@ -621,6 +647,7 @@ class CalibrationPage(QWidget):
         if self._current_item_key is None:
             return
         setattr(self.targets, self._current_item_key, Point(x=x, y=y))
+        self._hidden_keys.discard(self._current_item_key)
         self._auto_select_after_mark(self._current_item_key)
         self._current_item_key = None
         self._redraw_overlays()
@@ -648,6 +675,8 @@ class CalibrationPage(QWidget):
             val = getattr(self.targets, key)
             if val is None:
                 continue
+            if key in self._hidden_keys:
+                continue   # operator toggled this off — keep mark, skip drawing
             qcolor = QColor(color)
             if kind == "region":
                 overlays.append(CanvasOverlay(kind="region", label=label, color=qcolor,
@@ -660,21 +689,95 @@ class CalibrationPage(QWidget):
 
     def _refresh_items_list(self) -> None:
         prev = self.items_list.currentRow()
-        self.items_list.clear()
-        for key, kind, label, _color, required in ITEMS:
-            val = getattr(self.targets, key)
-            if val is None:
-                txt = f"[ ] {label}" + ("" if required else "  (optional)")
-            elif kind == "region":
-                txt = f"[X] {label}  {val.width}x{val.height} @ ({val.left},{val.top})"
-            else:
-                txt = f"[X] {label}  ({val.x}, {val.y})"
-            item = QListWidgetItem(txt)
-            item.setData(Qt.UserRole, key)
-            self.items_list.addItem(item)
-        # restore selection where possible
-        if 0 <= prev < self.items_list.count():
-            self.items_list.setCurrentRow(prev)
+        # Block our own itemChanged handler while we rebuild the list:
+        # setCheckState() fires that signal, and we don't want to treat
+        # programmatic state-restore as a user toggle.
+        self._refreshing_list = True
+        try:
+            self.items_list.clear()
+            for key, kind, label, _color, required in ITEMS:
+                val = getattr(self.targets, key)
+                if val is None:
+                    txt = f"[ ] {label}" + ("" if required else "  (optional)")
+                elif kind == "region":
+                    txt = f"[X] {label}  {val.width}x{val.height} @ ({val.left},{val.top})"
+                else:
+                    txt = f"[X] {label}  ({val.x}, {val.y})"
+                item = QListWidgetItem(txt)
+                item.setData(Qt.UserRole, key)
+                # Only marked items get a visibility checkbox — there's
+                # nothing to hide for unmarked rows. PySide6 includes
+                # ItemIsUserCheckable in the default flags, so we have to
+                # explicitly clear it on unmarked items to suppress the box.
+                if val is not None:
+                    item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                    item.setCheckState(
+                        Qt.Unchecked if key in self._hidden_keys else Qt.Checked
+                    )
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
+                self.items_list.addItem(item)
+            # restore selection where possible
+            if 0 <= prev < self.items_list.count():
+                self.items_list.setCurrentRow(prev)
+        finally:
+            self._refreshing_list = False
+
+    @Slot("QListWidgetItem*")
+    def _on_item_visibility_toggled(self, item: QListWidgetItem) -> None:
+        """Operator toggled the checkbox on a marked item — hide or show
+        its overlay on the canvas. The mark itself is preserved (saved
+        calibration is unaffected); only the visual overlay changes."""
+        if self._refreshing_list:
+            return
+        key = item.data(Qt.UserRole)
+        if not key:
+            return
+        if item.checkState() == Qt.Checked:
+            self._hidden_keys.discard(key)
+        else:
+            self._hidden_keys.add(key)
+        self._redraw_overlays()
+
+    @Slot("QListWidgetItem*", "QListWidgetItem*")
+    def _on_items_selection_changed(self, current: Optional[QListWidgetItem],
+                                    _previous: Optional[QListWidgetItem]) -> None:
+        """Selecting a row in the marked-items list mirrors that key into
+        the 'Mark:' combo so 'Start mark' acts on what the operator just
+        clicked. Guarded against the combo's reciprocal handler so the
+        two don't ping-pong."""
+        if self._syncing_selection or self._refreshing_list or current is None:
+            return
+        key = current.data(Qt.UserRole)
+        if not key:
+            return
+        idx = self.item_combo.findData(key)
+        if idx < 0:
+            return
+        self._syncing_selection = True
+        try:
+            self.item_combo.setCurrentIndex(idx)
+        finally:
+            self._syncing_selection = False
+
+    @Slot(int)
+    def _on_combo_changed(self, idx: int) -> None:
+        """Reciprocal of _on_items_selection_changed: changing the combo
+        highlights the matching row in the marked-items list."""
+        if self._syncing_selection:
+            return
+        key = self.item_combo.itemData(idx)
+        if not key:
+            return
+        self._syncing_selection = True
+        try:
+            for i in range(self.items_list.count()):
+                it = self.items_list.item(i)
+                if it.data(Qt.UserRole) == key:
+                    self.items_list.setCurrentRow(i)
+                    break
+        finally:
+            self._syncing_selection = False
 
     def _refresh_status(self) -> None:
         self.lv_source.set_value(self._image_source_display(),
@@ -780,6 +883,8 @@ class CalibrationPage(QWidget):
             position_size=sm.position_size_region,
             entry_price=sm.entry_price_region,
         )
+        # Loading from disk replaces every mark — start with everything visible.
+        self._hidden_keys.clear()
 
         full_path = paths.calibration_full_path()
         if full_path.exists():
@@ -819,6 +924,7 @@ class CalibrationPage(QWidget):
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         self.targets = CalibTargets()
+        self._hidden_keys.clear()
         self._redraw_overlays()
         self._refresh_items_list()
 
@@ -863,6 +969,7 @@ class CalibrationPage(QWidget):
         # also clear in-memory editor state so the UI doesn't pretend the
         # calibration still exists
         self.targets = CalibTargets()
+        self._hidden_keys.clear()
         self._full_image = None
         self._image_source = "none"
         self._monitor_size = (0, 0)
